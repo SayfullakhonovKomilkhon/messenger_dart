@@ -37,3 +37,4 @@
 | redis    | 6379 | Кеш и сессии         |
 | coturn   | 3478 | TURN сервер (WebRTC) |
 # messenger_beckend
+# messenger_flutter
