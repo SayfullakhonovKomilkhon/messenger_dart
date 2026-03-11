@@ -29,6 +29,15 @@ public class ConversationParticipant {
     @Column(name = "last_read_at")
     private LocalDateTime lastReadAt;
 
+    @Column(name = "is_pinned")
+    private Boolean isPinned = false;
+
+    @Column(name = "is_muted")
+    private Boolean isMuted = false;
+
+    @Column(name = "is_notifications_enabled")
+    private Boolean isNotificationsEnabled = true;
+
     public UUID getId() { return id; }
     public void setId(UUID id) { this.id = id; }
 
@@ -43,4 +52,13 @@ public class ConversationParticipant {
 
     public LocalDateTime getLastReadAt() { return lastReadAt; }
     public void setLastReadAt(LocalDateTime lastReadAt) { this.lastReadAt = lastReadAt; }
+
+    public Boolean getIsPinned() { return isPinned; }
+    public void setIsPinned(Boolean isPinned) { this.isPinned = isPinned; }
+
+    public Boolean getIsMuted() { return isMuted; }
+    public void setIsMuted(Boolean isMuted) { this.isMuted = isMuted; }
+
+    public Boolean getIsNotificationsEnabled() { return isNotificationsEnabled; }
+    public void setIsNotificationsEnabled(Boolean isNotificationsEnabled) { this.isNotificationsEnabled = isNotificationsEnabled; }
 }

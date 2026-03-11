@@ -1,8 +1,6 @@
 package com.messenger.chat;
 
-import com.messenger.chat.dto.ReadMessageRequest;
-import com.messenger.chat.dto.SendMessageRequest;
-import com.messenger.chat.dto.TypingRequest;
+import com.messenger.chat.dto.*;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.stereotype.Controller;
 
@@ -34,5 +32,35 @@ public class ChatWebSocketHandler {
     public void typing(TypingRequest request, Principal principal) {
         UUID userId = UUID.fromString(principal.getName());
         chatService.notifyTyping(userId, request);
+    }
+
+    @MessageMapping("/chat.edit")
+    public void editMessage(EditMessageRequest request, Principal principal) {
+        UUID userId = UUID.fromString(principal.getName());
+        chatService.editMessageAndNotify(userId, request);
+    }
+
+    @MessageMapping("/chat.delete")
+    public void deleteMessage(DeleteMessageRequest request, Principal principal) {
+        UUID userId = UUID.fromString(principal.getName());
+        chatService.deleteMessageAndNotify(userId, request);
+    }
+
+    @MessageMapping("/chat.forward")
+    public void forwardMessage(ForwardMessageRequest request, Principal principal) {
+        UUID userId = UUID.fromString(principal.getName());
+        chatService.forwardMessageAndNotify(userId, request);
+    }
+
+    @MessageMapping("/chat.pin")
+    public void pinMessage(PinMessageRequest request, Principal principal) {
+        UUID userId = UUID.fromString(principal.getName());
+        chatService.pinMessageAndNotify(userId, request);
+    }
+
+    @MessageMapping("/chat.unpin")
+    public void unpinMessage(PinMessageRequest request, Principal principal) {
+        UUID userId = UUID.fromString(principal.getName());
+        chatService.unpinMessageAndNotify(userId, request);
     }
 }

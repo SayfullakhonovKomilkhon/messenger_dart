@@ -9,5 +9,10 @@ public record SendMessageRequest(
         @NotNull UUID conversationId,
         String text,
         String fileUrl,
-        @NotBlank String clientMessageId
+        String mimeType,
+        @NotBlank String clientMessageId,
+        Boolean isVoiceMessage,
+        Integer voiceDuration,
+        String voiceWaveform,
+        UUID replyToId
 ) {}

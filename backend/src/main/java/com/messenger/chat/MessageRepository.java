@@ -38,4 +38,9 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
             "ORDER BY m.conversation_id, m.created_at DESC, m.id DESC",
             nativeQuery = true)
     List<Message> findLastMessagesByConversationIds(@Param("conversationIds") Collection<UUID> conversationIds);
+
+    @Query("SELECT m FROM Message m WHERE m.conversationId = :conversationId AND m.isPinned = true ORDER BY m.createdAt DESC")
+    List<Message> findPinnedMessages(@Param("conversationId") UUID conversationId);
+
+    void deleteAllByConversationId(UUID conversationId);
 }

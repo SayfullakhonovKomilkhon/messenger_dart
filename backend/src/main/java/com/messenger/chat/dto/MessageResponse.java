@@ -11,5 +11,14 @@ public record MessageResponse(
         String mimeType,
         String clientMessageId,
         String status,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        Boolean isVoiceMessage,
+        Integer voiceDuration,
+        String voiceWaveform,
+        String replyToId,
+        String forwardedFromId,
+        Boolean isPinned,
+        Boolean isEdited,
+        Boolean isDeleted,
+        LocalDateTime editedAt
 ) {}

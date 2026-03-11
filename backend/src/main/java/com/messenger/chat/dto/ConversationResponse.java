@@ -7,7 +7,9 @@ public record ConversationResponse(
         LocalDateTime updatedAt,
         ParticipantInfo participant,
         LastMessageInfo lastMessage,
-        int unreadCount
+        int unreadCount,
+        boolean isPinned,
+        boolean isMuted
 ) {
     public record ParticipantInfo(
             String id,

@@ -34,7 +34,10 @@ services:
   coturn:
     image: coturn/coturn:latest
     container_name: messenger_coturn
-    network_mode: host
+    ports:
+      - "3478:3478/tcp"
+      - "3478:3478/udp"
+      - "49160-49200:49160-49200/udp"
     command: >
       -n
       --log-file=stdout
@@ -46,6 +49,8 @@ services:
       --no-tls
       --no-dtls
       --fingerprint
+      --listening-ip=0.0.0.0
+      --external-ip=192.168.1.114
 
   backend:
     build:

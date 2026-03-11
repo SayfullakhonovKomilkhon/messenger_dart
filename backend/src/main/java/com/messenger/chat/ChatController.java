@@ -12,6 +12,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -50,5 +51,66 @@ public class ChatController {
             Authentication authentication) {
         UUID userId = UUID.fromString((String) authentication.getPrincipal());
         return ResponseEntity.ok(chatService.createOrGetConversation(userId, request.participantId()));
+    }
+
+    @Operation(summary = "Закрепить/открепить диалог")
+    @PatchMapping("/{id}/pin")
+    public ResponseEntity<Map<String, Boolean>> pinConversation(
+            @PathVariable UUID id,
+            @RequestParam boolean pinned,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        chatService.pinConversation(id, userId, pinned);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "Включить/выключить звук диалога")
+    @PatchMapping("/{id}/mute")
+    public ResponseEntity<Map<String, Boolean>> muteConversation(
+            @PathVariable UUID id,
+            @RequestParam boolean muted,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        chatService.muteConversation(id, userId, muted);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "Удалить диалог")
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Boolean>> deleteConversation(
+            @PathVariable UUID id,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        chatService.deleteConversation(id, userId);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "Очистить историю сообщений")
+    @DeleteMapping("/{id}/messages")
+    public ResponseEntity<Map<String, Boolean>> clearHistory(
+            @PathVariable UUID id,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        chatService.clearHistory(id, userId);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "Пометить диалог прочитанным")
+    @PostMapping("/{id}/read")
+    public ResponseEntity<Map<String, Boolean>> markRead(
+            @PathVariable UUID id,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        chatService.markConversationRead(id, userId);
+        return ResponseEntity.ok(Map.of("success", true));
+    }
+
+    @Operation(summary = "Закрепленные сообщения")
+    @GetMapping("/{id}/pinned")
+    public ResponseEntity<List<MessageResponse>> getPinnedMessages(
+            @PathVariable UUID id,
+            Authentication authentication) {
+        UUID userId = UUID.fromString((String) authentication.getPrincipal());
+        return ResponseEntity.ok(chatService.getPinnedMessages(id, userId));
     }
 }

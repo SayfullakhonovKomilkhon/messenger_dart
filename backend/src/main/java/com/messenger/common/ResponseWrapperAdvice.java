@@ -2,6 +2,7 @@ package com.messenger.common;
 
 import com.messenger.common.exception.ErrorResponse;
 import org.springframework.core.MethodParameter;
+import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.server.ServerHttpRequest;
@@ -25,15 +26,11 @@ public class ResponseWrapperAdvice implements ResponseBodyAdvice<Object> {
                                    ServerHttpRequest request,
                                    ServerHttpResponse response) {
         String path = request.getURI().getPath();
-        if (path.startsWith("/swagger-ui") || path.startsWith("/v3/api-docs")) {
+        if (path.startsWith("/swagger-ui") || path.startsWith("/v3/api-docs") || path.startsWith("/uploads/")) {
             return body;
         }
 
-        if (body instanceof ErrorResponse) {
-            return body;
-        }
-
-        if (body instanceof ApiResponse) {
+        if (body instanceof ErrorResponse || body instanceof ApiResponse || body instanceof Resource) {
             return body;
         }
 

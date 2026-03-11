@@ -82,8 +82,13 @@ public class CallService {
 
         User caller = userRepository.findById(callerId).orElse(null);
         String callerName = caller != null ? caller.getName() : "Unknown";
+        CallEventResponse calleeEvent = new CallEventResponse(
+                event.type(), event.callId(), event.callType(),
+                event.callerId(), event.calleeId(),
+                Map.of("callerName", callerName)
+        );
         notificationService.sendCallNotification(
-                request.calleeId(), callerName, request.callType(), event.callId(), event
+                request.calleeId(), callerName, request.callType(), event.callId(), calleeEvent
         );
     }
 

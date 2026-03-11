@@ -92,7 +92,9 @@ public class ChatService {
                     myParticipation.getConversation().getUpdatedAt(),
                     participantInfo,
                     lastMessageInfo,
-                    myParticipation.getUnreadCount() != null ? myParticipation.getUnreadCount() : 0
+                    myParticipation.getUnreadCount() != null ? myParticipation.getUnreadCount() : 0,
+                    Boolean.TRUE.equals(myParticipation.getIsPinned()),
+                    Boolean.TRUE.equals(myParticipation.getIsMuted())
             ));
         }
 
@@ -152,7 +154,9 @@ public class ChatService {
                             participant.getIsOnline()
                     ),
                     null,
-                    unread
+                    unread,
+                    myParticipant != null && Boolean.TRUE.equals(myParticipant.getIsPinned()),
+                    myParticipant != null && Boolean.TRUE.equals(myParticipant.getIsMuted())
             );
         }
 
@@ -181,7 +185,9 @@ public class ChatService {
                         participant.getIsOnline()
                 ),
                 null,
-                0
+                0,
+                false,
+                false
         );
     }
 
@@ -200,8 +206,17 @@ public class ChatService {
         message.setSenderId(senderId);
         message.setText(request.text());
         message.setFileUrl(request.fileUrl());
+        message.setMimeType(request.mimeType());
         message.setClientMessageId(request.clientMessageId());
         message.setStatus("SENT");
+        if (Boolean.TRUE.equals(request.isVoiceMessage())) {
+            message.setIsVoiceMessage(true);
+            message.setVoiceDuration(request.voiceDuration());
+            message.setVoiceWaveform(request.voiceWaveform());
+        }
+        if (request.replyToId() != null) {
+            message.setReplyToId(request.replyToId());
+        }
         message = messageRepository.save(message);
 
         Conversation conv = conversationRepository.findById(request.conversationId())
@@ -237,6 +252,16 @@ public class ChatService {
                     recipientId, senderId, senderName, request.text(), response
             );
         }
+    }
+
+    @Transactional
+    public void markConversationRead(UUID conversationId, UUID userId) {
+        ConversationParticipant cp = conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+
+        cp.setUnreadCount(0);
+        cp.setLastReadAt(LocalDateTime.now());
+        participantRepository.save(cp);
     }
 
     @Transactional
@@ -286,10 +311,176 @@ public class ChatService {
         }
     }
 
+    @Transactional
+    public void editMessageAndNotify(UUID userId, EditMessageRequest request) {
+        Message message = messageRepository.findById(request.messageId())
+                .orElseThrow(() -> new AppException("Message not found", HttpStatus.NOT_FOUND));
+        if (!message.getSenderId().equals(userId)) {
+            throw new AppException("Only sender can edit", HttpStatus.FORBIDDEN);
+        }
+
+        message.setText(request.text());
+        message.setIsEdited(true);
+        message.setEditedAt(LocalDateTime.now());
+        messageRepository.save(message);
+
+        Map<String, Object> event = Map.of(
+                "type", "message_edited",
+                "messageId", message.getId().toString(),
+                "conversationId", message.getConversationId().toString(),
+                "text", request.text(),
+                "editedAt", message.getEditedAt().toString()
+        );
+
+        List<UUID> participantIds = getOtherParticipantIds(message.getConversationId(), userId);
+        participantIds.forEach(id -> notificationService.sendToUser(id, "/queue/messages", event));
+        notificationService.sendToUser(userId, "/queue/messages", event);
+    }
+
+    @Transactional
+    public void deleteMessageAndNotify(UUID userId, DeleteMessageRequest request) {
+        Message message = messageRepository.findById(request.messageId())
+                .orElseThrow(() -> new AppException("Message not found", HttpStatus.NOT_FOUND));
+        if (!message.getSenderId().equals(userId)) {
+            throw new AppException("Only sender can delete", HttpStatus.FORBIDDEN);
+        }
+
+        message.setIsDeleted(true);
+        message.setText(null);
+        message.setFileUrl(null);
+        messageRepository.save(message);
+
+        Map<String, Object> event = Map.of(
+                "type", "message_deleted",
+                "messageId", message.getId().toString(),
+                "conversationId", message.getConversationId().toString()
+        );
+
+        List<UUID> participantIds = getOtherParticipantIds(message.getConversationId(), userId);
+        participantIds.forEach(id -> notificationService.sendToUser(id, "/queue/messages", event));
+        notificationService.sendToUser(userId, "/queue/messages", event);
+    }
+
+    @Transactional
+    public void forwardMessageAndNotify(UUID userId, ForwardMessageRequest request) {
+        Message original = messageRepository.findById(request.messageId())
+                .orElseThrow(() -> new AppException("Message not found", HttpStatus.NOT_FOUND));
+
+        for (UUID targetConvId : request.toConversationIds()) {
+            conversationRepository.findParticipant(targetConvId, userId)
+                    .orElseThrow(() -> new AppException("Not a participant of target conversation", HttpStatus.FORBIDDEN));
+
+            Message forwarded = new Message();
+            forwarded.setConversationId(targetConvId);
+            forwarded.setSenderId(userId);
+            forwarded.setText(original.getText());
+            forwarded.setFileUrl(original.getFileUrl());
+            forwarded.setMimeType(original.getMimeType());
+            forwarded.setClientMessageId(UUID.randomUUID().toString());
+            forwarded.setStatus("SENT");
+            forwarded.setForwardedFromId(original.getId());
+            forwarded.setIsVoiceMessage(original.getIsVoiceMessage());
+            forwarded.setVoiceDuration(original.getVoiceDuration());
+            forwarded.setVoiceWaveform(original.getVoiceWaveform());
+            messageRepository.save(forwarded);
+
+            Conversation conv = conversationRepository.findById(targetConvId)
+                    .orElseThrow(() -> new AppException("Conversation not found", HttpStatus.NOT_FOUND));
+            conv.setUpdatedAt(LocalDateTime.now());
+            conversationRepository.save(conv);
+
+            MessageResponse response = toMessageResponse(forwarded);
+            notificationService.sendToUser(userId, "/queue/messages", response);
+            List<UUID> others = getOtherParticipantIds(targetConvId, userId);
+            others.forEach(id -> notificationService.sendToUser(id, "/queue/messages", response));
+        }
+    }
+
+    @Transactional
+    public void pinMessageAndNotify(UUID userId, PinMessageRequest request) {
+        Message message = messageRepository.findById(request.messageId())
+                .orElseThrow(() -> new AppException("Message not found", HttpStatus.NOT_FOUND));
+        conversationRepository.findParticipant(message.getConversationId(), userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+
+        message.setIsPinned(true);
+        messageRepository.save(message);
+
+        Map<String, Object> event = Map.of(
+                "type", "message_pinned",
+                "messageId", message.getId().toString(),
+                "conversationId", message.getConversationId().toString()
+        );
+
+        List<UUID> participantIds = getOtherParticipantIds(message.getConversationId(), userId);
+        participantIds.forEach(id -> notificationService.sendToUser(id, "/queue/messages", event));
+        notificationService.sendToUser(userId, "/queue/messages", event);
+    }
+
+    @Transactional
+    public void unpinMessageAndNotify(UUID userId, PinMessageRequest request) {
+        Message message = messageRepository.findById(request.messageId())
+                .orElseThrow(() -> new AppException("Message not found", HttpStatus.NOT_FOUND));
+        conversationRepository.findParticipant(message.getConversationId(), userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+
+        message.setIsPinned(false);
+        messageRepository.save(message);
+
+        Map<String, Object> event = Map.of(
+                "type", "message_unpinned",
+                "messageId", message.getId().toString(),
+                "conversationId", message.getConversationId().toString()
+        );
+
+        List<UUID> participantIds = getOtherParticipantIds(message.getConversationId(), userId);
+        participantIds.forEach(id -> notificationService.sendToUser(id, "/queue/messages", event));
+        notificationService.sendToUser(userId, "/queue/messages", event);
+    }
+
     public List<UUID> getOtherParticipantIds(UUID conversationId, UUID excludeUserId) {
         return conversationRepository.findParticipants(conversationId).stream()
                 .map(cp -> cp.getUser().getId())
                 .filter(id -> !id.equals(excludeUserId))
+                .toList();
+    }
+
+    @Transactional
+    public void pinConversation(UUID conversationId, UUID userId, boolean pinned) {
+        ConversationParticipant cp = conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+        cp.setIsPinned(pinned);
+        participantRepository.save(cp);
+    }
+
+    @Transactional
+    public void muteConversation(UUID conversationId, UUID userId, boolean muted) {
+        ConversationParticipant cp = conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+        cp.setIsMuted(muted);
+        participantRepository.save(cp);
+    }
+
+    @Transactional
+    public void deleteConversation(UUID conversationId, UUID userId) {
+        conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+        messageRepository.deleteAllByConversationId(conversationId);
+        conversationRepository.deleteById(conversationId);
+    }
+
+    @Transactional
+    public void clearHistory(UUID conversationId, UUID userId) {
+        conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+        messageRepository.deleteAllByConversationId(conversationId);
+    }
+
+    public List<MessageResponse> getPinnedMessages(UUID conversationId, UUID userId) {
+        conversationRepository.findParticipant(conversationId, userId)
+                .orElseThrow(() -> new AppException("Not a participant", HttpStatus.FORBIDDEN));
+        return messageRepository.findPinnedMessages(conversationId).stream()
+                .map(this::toMessageResponse)
                 .toList();
     }
 
@@ -298,12 +489,21 @@ public class ChatService {
                 message.getId().toString(),
                 message.getConversationId().toString(),
                 message.getSenderId().toString(),
-                message.getText(),
-                message.getFileUrl(),
+                message.getIsDeleted() != null && message.getIsDeleted() ? null : message.getText(),
+                message.getIsDeleted() != null && message.getIsDeleted() ? null : message.getFileUrl(),
                 message.getMimeType(),
                 message.getClientMessageId(),
                 message.getStatus(),
-                message.getCreatedAt()
+                message.getCreatedAt(),
+                message.getIsVoiceMessage(),
+                message.getVoiceDuration(),
+                message.getVoiceWaveform(),
+                message.getReplyToId() != null ? message.getReplyToId().toString() : null,
+                message.getForwardedFromId() != null ? message.getForwardedFromId().toString() : null,
+                message.getIsPinned(),
+                message.getIsEdited(),
+                message.getIsDeleted(),
+                message.getEditedAt()
         );
     }
 }

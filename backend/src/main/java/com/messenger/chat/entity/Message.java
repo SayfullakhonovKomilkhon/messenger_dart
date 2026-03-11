@@ -33,6 +33,33 @@ public class Message {
     @Column(length = 20)
     private String status = "SENT";
 
+    @Column(name = "is_voice_message")
+    private Boolean isVoiceMessage = false;
+
+    @Column(name = "voice_duration")
+    private Integer voiceDuration;
+
+    @Column(name = "voice_waveform")
+    private String voiceWaveform;
+
+    @Column(name = "reply_to_id")
+    private UUID replyToId;
+
+    @Column(name = "forwarded_from_id")
+    private UUID forwardedFromId;
+
+    @Column(name = "is_pinned")
+    private Boolean isPinned = false;
+
+    @Column(name = "is_edited")
+    private Boolean isEdited = false;
+
+    @Column(name = "is_deleted")
+    private Boolean isDeleted = false;
+
+    @Column(name = "edited_at")
+    private LocalDateTime editedAt;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -64,6 +91,33 @@ public class Message {
 
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
+
+    public Boolean getIsVoiceMessage() { return isVoiceMessage; }
+    public void setIsVoiceMessage(Boolean isVoiceMessage) { this.isVoiceMessage = isVoiceMessage; }
+
+    public Integer getVoiceDuration() { return voiceDuration; }
+    public void setVoiceDuration(Integer voiceDuration) { this.voiceDuration = voiceDuration; }
+
+    public String getVoiceWaveform() { return voiceWaveform; }
+    public void setVoiceWaveform(String voiceWaveform) { this.voiceWaveform = voiceWaveform; }
+
+    public UUID getReplyToId() { return replyToId; }
+    public void setReplyToId(UUID replyToId) { this.replyToId = replyToId; }
+
+    public UUID getForwardedFromId() { return forwardedFromId; }
+    public void setForwardedFromId(UUID forwardedFromId) { this.forwardedFromId = forwardedFromId; }
+
+    public Boolean getIsPinned() { return isPinned; }
+    public void setIsPinned(Boolean isPinned) { this.isPinned = isPinned; }
+
+    public Boolean getIsEdited() { return isEdited; }
+    public void setIsEdited(Boolean isEdited) { this.isEdited = isEdited; }
+
+    public Boolean getIsDeleted() { return isDeleted; }
+    public void setIsDeleted(Boolean isDeleted) { this.isDeleted = isDeleted; }
+
+    public LocalDateTime getEditedAt() { return editedAt; }
+    public void setEditedAt(LocalDateTime editedAt) { this.editedAt = editedAt; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
 }

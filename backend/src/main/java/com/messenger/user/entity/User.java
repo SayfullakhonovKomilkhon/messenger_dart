@@ -1,6 +1,8 @@
 package com.messenger.user.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -30,6 +32,12 @@ public class User {
 
     @Column(name = "fcm_token")
     private String fcmToken;
+
+    private String bio;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(columnDefinition = "jsonb")
+    private String settings = "{}";
 
     @Column(name = "is_online")
     private Boolean isOnline = false;
@@ -77,6 +85,12 @@ public class User {
 
     public Boolean getIsOnline() { return isOnline; }
     public void setIsOnline(Boolean isOnline) { this.isOnline = isOnline; }
+
+    public String getBio() { return bio; }
+    public void setBio(String bio) { this.bio = bio; }
+
+    public String getSettings() { return settings; }
+    public void setSettings(String settings) { this.settings = settings; }
 
     public LocalDateTime getLastSeenAt() { return lastSeenAt; }
     public void setLastSeenAt(LocalDateTime lastSeenAt) { this.lastSeenAt = lastSeenAt; }
