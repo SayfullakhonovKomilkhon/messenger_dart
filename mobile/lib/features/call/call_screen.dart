@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:go_router/go_router.dart';
+import '../../core/e2ee/crypto_service.dart';
 import '../../core/network/ws_client.dart';
 import '../../core/providers.dart';
 
@@ -48,6 +49,9 @@ class _CallScreenState extends ConsumerState<CallScreen>
   final List<RTCIceCandidate> _pendingCandidates = [];
   bool _remoteDescriptionSet = false;
   bool _swappedVideo = false;
+  final _crypto = E2eeCryptoService();
+  bool _isE2eeActive = false;
+  String? _peerId;
 
   static String _statusRu(String en) {
     switch (en) {
@@ -97,6 +101,7 @@ class _CallScreenState extends ConsumerState<CallScreen>
   }
 
   Future<void> _init() async {
+    _peerId = widget.calleeId;
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
 
@@ -170,7 +175,14 @@ class _CallScreenState extends ConsumerState<CallScreen>
         );
       } catch (_) {}
     }
-    if (mounted) context.pop();
+    if (mounted) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        // Открыто через push (context.go) — pop невозможен, идём на главную
+        context.go('/');
+      }
+    }
   }
 
   Future<void> _setupWebRTC({bool initOffer = true}) async {
@@ -200,7 +212,7 @@ class _CallScreenState extends ConsumerState<CallScreen>
         {'urls': 'stun:stun.l.google.com:19302'},
         {'urls': 'stun:stun1.l.google.com:19302'},
         {
-          'urls': ['turn:192.168.1.114:3478?transport=udp', 'turn:192.168.1.114:3478?transport=tcp'],
+          'urls': ['turn:31.130.150.246:3478?transport=udp', 'turn:31.130.150.246:3478?transport=tcp'],
           'username': 'turnuser',
           'credential': 'turn_pass_2024',
         },
@@ -225,15 +237,9 @@ class _CallScreenState extends ConsumerState<CallScreen>
 
     _pc!.onIceCandidate = (candidate) {
       final candidateStr = candidate.candidate ?? '';
-      debugPrint('[CALL] ICE candidate: ${candidateStr.length > 50 ? candidateStr.substring(0, 50) : candidateStr}...');
+      debugPrint('[CALL-E2EE] ICE candidate: ${candidateStr.length > 50 ? candidateStr.substring(0, 50) : candidateStr}...');
       if (_activeCallId != null) {
-        WsClient().send(
-          '/app/call.ice',
-          body: jsonEncode({
-            'callId': _activeCallId,
-            'candidate': jsonEncode(candidate.toMap()),
-          }),
-        );
+        _sendEncryptedIce(candidate);
       }
     };
 
@@ -266,20 +272,38 @@ class _CallScreenState extends ConsumerState<CallScreen>
 
   Future<void> _createAndSendOffer() async {
     if (_pc == null || _activeCallId == null) {
-      debugPrint('[CALL] Cannot create offer: pc=$_pc, callId=$_activeCallId');
+      debugPrint('[CALL-E2EE] Cannot create offer: pc=$_pc, callId=$_activeCallId');
       return;
     }
     try {
-      debugPrint('[CALL] Creating SDP offer...');
+      debugPrint('[CALL-E2EE] Creating SDP offer...');
       final offer = await _pc!.createOffer();
       await _pc!.setLocalDescription(offer);
-      debugPrint('[CALL] SDP offer created, sending to server');
+
+      final sdpStr = offer.sdp ?? '';
+      if (_peerId != null) {
+        final encrypted = await _crypto.encryptMessage(_peerId!, sdpStr);
+        if (encrypted != null) {
+          debugPrint('[CALL-E2EE] SDP offer encrypted, sending');
+          await WsClient().send(
+            '/app/call.sdpOffer',
+            body: jsonEncode({
+              'callId': _activeCallId,
+              'sdp': '${encrypted.messageType}:${encrypted.ciphertextBase64}',
+              'encrypted': true,
+            }),
+          );
+          if (mounted) setState(() => _isE2eeActive = true);
+          return;
+        }
+      }
+      debugPrint('[CALL-E2EE] Fallback: sending SDP offer unencrypted');
       await WsClient().send(
         '/app/call.sdpOffer',
-        body: jsonEncode({'callId': _activeCallId, 'sdp': offer.sdp}),
+        body: jsonEncode({'callId': _activeCallId, 'sdp': sdpStr, 'encrypted': false}),
       );
     } catch (e) {
-      debugPrint('[CALL] Error sending offer: $e');
+      debugPrint('[CALL-E2EE] Error sending offer: $e');
     }
   }
 
@@ -319,6 +343,14 @@ class _CallScreenState extends ConsumerState<CallScreen>
             await _createAndSendOffer();
           }
           break;
+        case 'CALL_BLOCKED':
+          if (mounted) {
+            final reason = data['data']?['reason'] as String? ?? 'Пользователь не принимает звонки';
+            setState(() => _status = reason);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(reason)));
+          }
+          _endCall(sendToServer: false);
+          break;
         case 'CALL_ENDED':
         case 'CALL_REJECTED':
           if (mounted) {
@@ -327,12 +359,22 @@ class _CallScreenState extends ConsumerState<CallScreen>
           _endCall(sendToServer: false);
           break;
         case 'ICE_CANDIDATE':
-          debugPrint('[CALL] Received ICE_CANDIDATE');
+          debugPrint('[CALL-E2EE] Received ICE_CANDIDATE');
           if (data['data'] != null && data['data']['candidate'] != null) {
-            final candidateStr = data['data']['candidate'];
-            final candidateMap = candidateStr is String
-                ? jsonDecode(candidateStr)
-                : candidateStr;
+            final isEnc = data['data']['encrypted'] == true;
+            String candidateRaw = data['data']['candidate'];
+            if (isEnc && _peerId != null) {
+              final decrypted = await _decryptSignaling(candidateRaw);
+              if (decrypted != null) {
+                candidateRaw = decrypted;
+              } else {
+                debugPrint('[CALL-E2EE] Failed to decrypt ICE candidate');
+                break;
+              }
+            }
+            final candidateMap = candidateRaw is String
+                ? jsonDecode(candidateRaw)
+                : candidateRaw;
             final iceCandidate = RTCIceCandidate(
               candidateMap['candidate'],
               candidateMap['sdpMid'],
@@ -341,25 +383,47 @@ class _CallScreenState extends ConsumerState<CallScreen>
             if (_remoteDescriptionSet && _pc != null) {
               _pc!.addCandidate(iceCandidate);
             } else {
-              debugPrint('[CALL] Buffering ICE candidate (remote desc not set yet)');
+              debugPrint('[CALL-E2EE] Buffering ICE candidate (remote desc not set yet)');
               _pendingCandidates.add(iceCandidate);
             }
           }
           break;
         case 'SDP_ANSWER':
-          debugPrint('[CALL] Received SDP_ANSWER');
+          debugPrint('[CALL-E2EE] Received SDP_ANSWER');
           if (data['data'] != null && data['data']['sdp'] != null) {
-            await _pc?.setRemoteDescription(
-              RTCSessionDescription(data['data']['sdp'], 'answer'),
-            );
+            final isEnc = data['data']['encrypted'] == true;
+            String sdp = data['data']['sdp'];
+            if (isEnc && _peerId != null) {
+              final decrypted = await _decryptSignaling(sdp);
+              if (decrypted != null) {
+                sdp = decrypted;
+                if (mounted) setState(() => _isE2eeActive = true);
+              } else {
+                debugPrint('[CALL-E2EE] Failed to decrypt SDP answer');
+                break;
+              }
+            }
+            await _pc?.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
             _remoteDescriptionSet = true;
             _flushPendingCandidates();
           }
           break;
         case 'SDP_OFFER':
-          debugPrint('[CALL] Received SDP_OFFER');
+          debugPrint('[CALL-E2EE] Received SDP_OFFER');
           if (data['data'] != null && data['data']['sdp'] != null) {
-            await _handleOffer(data['data']['sdp']);
+            final isEnc = data['data']['encrypted'] == true;
+            String sdp = data['data']['sdp'];
+            if (isEnc && _peerId != null) {
+              final decrypted = await _decryptSignaling(sdp);
+              if (decrypted != null) {
+                sdp = decrypted;
+                if (mounted) setState(() => _isE2eeActive = true);
+              } else {
+                debugPrint('[CALL-E2EE] Failed to decrypt SDP offer');
+                break;
+              }
+            }
+            await _handleOffer(sdp);
           }
           break;
       }
@@ -368,22 +432,81 @@ class _CallScreenState extends ConsumerState<CallScreen>
 
   Future<void> _handleOffer(String sdp) async {
     if (_pc == null) {
-      debugPrint('[CALL] _handleOffer: PeerConnection is null!');
+      debugPrint('[CALL-E2EE] _handleOffer: PeerConnection is null!');
       return;
     }
-    debugPrint('[CALL] Setting remote description (offer)...');
+    debugPrint('[CALL-E2EE] Setting remote description (offer)...');
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     _remoteDescriptionSet = true;
     _flushPendingCandidates();
 
-    debugPrint('[CALL] Creating SDP answer...');
+    debugPrint('[CALL-E2EE] Creating SDP answer...');
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
-    debugPrint('[CALL] SDP answer created, sending to server');
+
+    final answerSdp = answer.sdp ?? '';
+    if (_peerId != null) {
+      final encrypted = await _crypto.encryptMessage(_peerId!, answerSdp);
+      if (encrypted != null) {
+        debugPrint('[CALL-E2EE] SDP answer encrypted, sending');
+        await WsClient().send(
+          '/app/call.sdpAnswer',
+          body: jsonEncode({
+            'callId': _activeCallId,
+            'sdp': '${encrypted.messageType}:${encrypted.ciphertextBase64}',
+            'encrypted': true,
+          }),
+        );
+        if (mounted) setState(() => _isE2eeActive = true);
+        return;
+      }
+    }
+    debugPrint('[CALL-E2EE] Fallback: sending SDP answer unencrypted');
     await WsClient().send(
       '/app/call.sdpAnswer',
-      body: jsonEncode({'callId': _activeCallId, 'sdp': answer.sdp}),
+      body: jsonEncode({'callId': _activeCallId, 'sdp': answerSdp, 'encrypted': false}),
     );
+  }
+
+  Future<void> _sendEncryptedIce(RTCIceCandidate candidate) async {
+    final candidateJson = jsonEncode(candidate.toMap());
+    if (_peerId != null) {
+      final encrypted = await _crypto.encryptMessage(_peerId!, candidateJson);
+      if (encrypted != null) {
+        await WsClient().send(
+          '/app/call.ice',
+          body: jsonEncode({
+            'callId': _activeCallId,
+            'candidate': '${encrypted.messageType}:${encrypted.ciphertextBase64}',
+            'encrypted': true,
+          }),
+        );
+        return;
+      }
+    }
+    await WsClient().send(
+      '/app/call.ice',
+      body: jsonEncode({
+        'callId': _activeCallId,
+        'candidate': candidateJson,
+        'encrypted': false,
+      }),
+    );
+  }
+
+  Future<String?> _decryptSignaling(String payload) async {
+    if (_peerId == null) return null;
+    try {
+      final colonIdx = payload.indexOf(':');
+      if (colonIdx < 0) return null;
+      final messageType = int.tryParse(payload.substring(0, colonIdx));
+      final ciphertext = payload.substring(colonIdx + 1);
+      if (messageType == null) return null;
+      return await _crypto.decryptMessage(_peerId!, ciphertext, messageType);
+    } catch (e) {
+      debugPrint('[CALL-E2EE] Decrypt signaling error: $e');
+      return null;
+    }
   }
 
   void _flushPendingCandidates() {
@@ -436,7 +559,7 @@ class _CallScreenState extends ConsumerState<CallScreen>
     if (mounted) setState(() => _isFrontCamera = !_isFrontCamera);
   }
 
-  Future<void> _endCall({bool sendToServer = true}) async {
+  void _endCall({bool sendToServer = true}) {
     if (_callEnded) return;
     _callEnded = true;
 
@@ -448,16 +571,129 @@ class _CallScreenState extends ConsumerState<CallScreen>
       _wsSubId = null;
     }
 
+    // Важно: сначала отправить call.end — сервер разошлёт CALL_ENDED обоим участникам
     if (sendToServer && _activeCallId != null) {
-      try {
-        await WsClient().send(
-          '/app/call.end',
-          body: jsonEncode({'callId': _activeCallId}),
-        );
-      } catch (_) {}
+      final callId = _activeCallId;
+      WsClient().send(
+        '/app/call.end',
+        body: jsonEncode({'callId': callId}),
+      ).catchError((_) {});
     }
 
-    // Освобождаем WebRTC-ресурсы и обнуляем ссылки
+    if (mounted) {
+      if (context.canPop()) {
+        context.pop();
+      } else {
+        // Открыто через push (context.go) — pop невозможен, идём на главную
+        context.go('/');
+      }
+    }
+  }
+
+  void _showE2eeInfo() {
+    final userId = ref.read(authStateProvider).user?.id;
+    if (userId == null || _peerId == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1B2838),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return FutureBuilder<String?>(
+          future: _crypto.getSafetyNumber(userId, _peerId!),
+          builder: (ctx, snap) {
+            final safetyNumber = snap.data;
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  const Icon(Icons.lock, color: Color(0xFF34C759), size: 40),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Сквозное шифрование',
+                    style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Сигналинг этого звонка (SDP, ICE) зашифрован через Signal Protocol. '
+                    'Сервер не может перехватить медиапоток.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white.withValues(alpha: 0.7), fontSize: 13),
+                  ),
+                  if (safetyNumber != null) ...[
+                    const SizedBox(height: 20),
+                    const Text(
+                      'Код безопасности',
+                      style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Сравните этот код вслух во время звонка:',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 12),
+                    ),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        _formatSafetyNumber(safetyNumber),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 2,
+                          fontFamily: 'monospace',
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 24),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String _formatSafetyNumber(String number) {
+    final clean = number.replaceAll(RegExp(r'\s'), '');
+    final buffer = StringBuffer();
+    for (var i = 0; i < clean.length; i += 5) {
+      if (buffer.isNotEmpty) buffer.write('  ');
+      buffer.write(clean.substring(i, (i + 5).clamp(0, clean.length)));
+    }
+    return buffer.toString();
+  }
+
+  @override
+  void dispose() {
+    _ringController.dispose();
+    _durationTimer?.cancel();
+
+    if (_wsSubId != null) {
+      WsClient().unsubscribeById(_wsSubId!);
+      _wsSubId = null;
+    }
+
+    // Отвязываем stream от renderers
     _localRenderer.srcObject = null;
     _remoteRenderer.srcObject = null;
 
@@ -466,34 +702,13 @@ class _CallScreenState extends ConsumerState<CallScreen>
     final pc = _pc;
     _pc = null;
 
-    stream?.getTracks().forEach((track) => track.stop());
-    stream?.dispose();
-    pc?.close();
-
-    await Future.delayed(const Duration(milliseconds: 500));
-    if (mounted) context.pop();
-  }
-
-  @override
-  void dispose() {
-    _ringController.dispose();
-    _durationTimer?.cancel();
-
-    // Отписываемся от WebSocket, если ещё не сделали
-    if (_wsSubId != null) {
-      WsClient().unsubscribeById(_wsSubId!);
-      _wsSubId = null;
-    }
-
-    // Чистим WebRTC только если _endCall() не был вызван
-    if (!_callEnded) {
-      _localRenderer.srcObject = null;
-      _remoteRenderer.srcObject = null;
-      _localStream?.getTracks().forEach((track) => track.stop());
-      _localStream?.dispose();
-      _localStream = null;
-      _pc?.close();
-      _pc = null;
+    // Отложенная очистка — track.stop() и pc.close() могут блокировать на Android
+    if (stream != null || pc != null) {
+      Future(() {
+        stream?.getTracks().forEach((track) => track.stop());
+        stream?.dispose();
+        pc?.close();
+      });
     }
 
     _localRenderer.dispose();
@@ -625,9 +840,13 @@ class _CallScreenState extends ConsumerState<CallScreen>
                             objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                           )
                         : Center(
-                            child: CircleAvatar(
-                              radius: 28,
-                              backgroundColor: Colors.white.withValues(alpha: 0.15),
+                            child: Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
                               child: const Icon(Icons.videocam_off, color: Colors.white70, size: 28),
                             ),
                           )),
@@ -657,13 +876,24 @@ class _CallScreenState extends ConsumerState<CallScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.calleeName,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Text(
+                      widget.calleeName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    if (_isE2eeActive) ...[
+                      const SizedBox(width: 6),
+                      GestureDetector(
+                        onTap: _showE2eeInfo,
+                        child: const Icon(Icons.lock, color: Color(0xFF34C759), size: 16),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -756,13 +986,9 @@ class _CallScreenState extends ConsumerState<CallScreen>
             if (!isConnected)
               _PulsingAvatar(animation: _ringController, name: widget.calleeName)
             else
-              CircleAvatar(
-                radius: 56,
-                backgroundColor: const Color(0xFF5B7FFF).withValues(alpha: 0.25),
-                child: Text(
-                  widget.calleeName.isNotEmpty ? widget.calleeName[0].toUpperCase() : '?',
-                  style: const TextStyle(fontSize: 44, color: Color(0xFF5B7FFF), fontWeight: FontWeight.w600),
-                ),
+              _RoundedAvatar(
+                size: 112,
+                name: widget.calleeName,
               ),
             const SizedBox(height: 24),
             Text(
@@ -775,6 +1001,30 @@ class _CallScreenState extends ConsumerState<CallScreen>
                     style: const TextStyle(fontSize: 16, color: Color(0xFF34C759), fontWeight: FontWeight.w500))
                 : Text(_displayStatus,
                     style: TextStyle(fontSize: 15, color: Colors.white.withValues(alpha: 0.6))),
+            if (_isE2eeActive) ...[
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: _showE2eeInfo,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF34C759).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock, color: Color(0xFF34C759), size: 14),
+                      SizedBox(width: 4),
+                      Text(
+                        'Сквозное шифрование',
+                        style: TextStyle(color: Color(0xFF34C759), fontSize: 12, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const Spacer(flex: 3),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -840,7 +1090,7 @@ class _PulsingAvatar extends StatelessWidget {
                   width: 112,
                   height: 112,
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: const Color(0xFF5B7FFF).withValues(alpha: opacity),
                       width: 2,
@@ -849,17 +1099,39 @@ class _PulsingAvatar extends StatelessWidget {
                 ),
               );
             }),
-            CircleAvatar(
-              radius: 56,
-              backgroundColor: const Color(0xFF5B7FFF).withValues(alpha: 0.25),
-              child: Text(
-                name.isNotEmpty ? name[0].toUpperCase() : '?',
-                style: const TextStyle(fontSize: 44, color: Color(0xFF5B7FFF), fontWeight: FontWeight.w600),
-              ),
-            ),
+            _RoundedAvatar(size: 112, name: name),
           ],
         );
       },
+    );
+  }
+}
+
+class _RoundedAvatar extends StatelessWidget {
+  final double size;
+  final String name;
+
+  const _RoundedAvatar({required this.size, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: const Color(0xFF5B7FFF).withValues(alpha: 0.25),
+        borderRadius: BorderRadius.circular(size * 0.14),
+      ),
+      child: Center(
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          style: TextStyle(
+            fontSize: size * 0.4,
+            color: const Color(0xFF5B7FFF),
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'l10n/app_localizations.dart';
 import 'core/providers.dart';
+import 'core/widgets/app_lock_wrapper.dart';
+import 'core/widgets/notification_handler.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/login_screen.dart';
-import 'features/auth/register_screen.dart';
 import 'features/home/home_screen.dart';
 import 'features/conversation/conversation_screen.dart';
 import 'features/call/call_screen.dart';
@@ -18,8 +21,8 @@ import 'features/settings/blocked_contacts_screen.dart';
 import 'features/settings/message_requests_screen.dart';
 import 'features/settings/edit_profile_screen.dart';
 import 'features/profile/user_profile_screen.dart';
-import 'features/placeholders/telepathy_screen.dart';
-import 'features/placeholders/path_screen.dart';
+import 'features/group/create_group_screen.dart';
+import 'features/group/group_info_screen.dart';
 
 class MessengerApp extends ConsumerWidget {
   const MessengerApp({super.key});
@@ -28,6 +31,7 @@ class MessengerApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeState = ref.watch(themeProvider);
     final authState = ref.watch(authStateProvider);
+    final locale = ref.watch(localeProvider);
     final systemBrightness = MediaQuery.platformBrightnessOf(context);
     final effectiveType = themeState.followSystemTheme
         ? (systemBrightness == Brightness.light
@@ -44,14 +48,19 @@ class MessengerApp extends ConsumerWidget {
       redirect: (context, state) {
         if (authState.isLoading) return null;
         final isAuth = authState.isAuthenticated;
-        final isAuthRoute = state.matchedLocation == '/login' ||
-            state.matchedLocation == '/register';
+        final isAuthRoute = state.matchedLocation == '/login';
 
         if (!isAuth && !isAuthRoute) return '/login';
         if (isAuth && isAuthRoute) return '/';
         return null;
       },
       routes: [
+        ShellRoute(
+          builder: (context, state, child) => NotificationHandler(
+            isAuthenticated: authState.isAuthenticated,
+            child: child,
+          ),
+          routes: [
         GoRoute(
           path: '/',
           builder: (_, _) => const HomeScreen(),
@@ -61,16 +70,13 @@ class MessengerApp extends ConsumerWidget {
           builder: (_, _) => const LoginScreen(),
         ),
         GoRoute(
-          path: '/register',
-          builder: (_, _) => const RegisterScreen(),
-        ),
-        GoRoute(
           path: '/conversation/:id',
           builder: (_, state) => ConversationScreen(
             conversationId: state.pathParameters['id']!,
             participantName: state.uri.queryParameters['name'] ?? '',
             participantAvatar: state.uri.queryParameters['avatar'],
             participantId: state.uri.queryParameters['participantId'] ?? '',
+            isGroup: state.uri.queryParameters['isGroup'] == 'true',
           ),
         ),
         GoRoute(
@@ -119,24 +125,36 @@ class MessengerApp extends ConsumerWidget {
           path: '/profile/:id',
           builder: (_, state) => UserProfileScreen(
             userId: state.pathParameters['id']!,
+            conversationId: state.uri.queryParameters['conversationId'],
+            participantName: state.uri.queryParameters['name'],
+            participantAvatar: state.uri.queryParameters['avatar'],
           ),
         ),
         GoRoute(
-          path: '/telepathy',
-          builder: (_, _) => const TelepathyScreen(),
+          path: '/groups/create',
+          builder: (_, _) => const CreateGroupScreen(),
         ),
         GoRoute(
-          path: '/path',
-          builder: (_, _) => const PathScreen(),
+          path: '/groups/:id/info',
+          builder: (_, state) => GroupInfoScreen(
+            groupId: state.pathParameters['id']!,
+          ),
+        ),
+          ],
         ),
       ],
     );
 
-    return MaterialApp.router(
-      title: 'Messenger',
-      theme: themeData,
-      routerConfig: router,
-      debugShowCheckedModeBanner: false,
+    return AppLockWrapper(
+      child: MaterialApp.router(
+        title: 'Messenger',
+        theme: themeData,
+        routerConfig: router,
+        debugShowCheckedModeBanner: false,
+        locale: locale,
+        supportedLocales: AppLocalizations.supportedLocales,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+      ),
     );
   }
 }

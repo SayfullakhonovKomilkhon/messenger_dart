@@ -15,14 +15,6 @@ class AppColors {
   static const Color darkSurface = Color(0xFF16213E);
   static const Color darkCard = Color(0xFF1F2940);
 
-  static const Color midnightBg = Color(0xFF252735);
-  static const Color midnightSurface = Color(0xFF2E3142);
-  static const Color midnightCard = Color(0xFF3D4A5D);
-
-  static const Color amoledBg = Color(0xFF000000);
-  static const Color amoledSurface = Color(0xFF0A0A0A);
-  static const Color amoledCard = Color(0xFF141414);
-
   // Demos brand letter colors
   static const Color brandD = Color(0xFF000000);
   static const Color brandE = Color(0xFFE4AD3C);

@@ -1,21 +1,26 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/user_avatar.dart';
+import '../../core/storage/local_storage.dart';
 import '../../core/network/api_client.dart';
 import '../../core/network/ws_client.dart';
 import '../../core/theme/app_theme.dart';
+import '../../l10n/app_localizations.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Настройки'),
+        title: Text(l.settingsTitle),
         centerTitle: true,
       ),
       body: const SettingsBody(),
@@ -28,10 +33,12 @@ class SettingsBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l = AppLocalizations.of(context)!;
     final authState = ref.watch(authStateProvider);
     final user = authState.user;
     final theme = Theme.of(context);
     final themeState = ref.watch(themeProvider);
+    final currentLocale = ref.watch(localeProvider);
 
     return ListView(
       children: [
@@ -43,19 +50,10 @@ class SettingsBody extends ConsumerWidget {
                 onTap: () => context.push('/settings/edit-profile'),
                 child: Stack(
                   children: [
-                    CircleAvatar(
+                    UserAvatar(
+                      avatarUrl: user?.avatarUrl,
+                      name: user?.name ?? '',
                       radius: 44,
-                      backgroundImage: user?.avatarUrl != null
-                          ? NetworkImage(user!.avatarUrl!)
-                          : null,
-                      child: user?.avatarUrl == null
-                          ? Text(
-                              user?.name.isNotEmpty == true
-                                  ? user!.name[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(fontSize: 36),
-                            )
-                          : null,
                     ),
                     Positioned(
                       bottom: 0,
@@ -71,7 +69,7 @@ class SettingsBody extends ConsumerWidget {
                           ),
                         ),
                         child: const Icon(
-                          Icons.edit,
+                          CupertinoIcons.pencil,
                           size: 14,
                           color: Colors.white,
                         ),
@@ -89,27 +87,38 @@ class SettingsBody extends ConsumerWidget {
                       ?.copyWith(fontWeight: FontWeight.bold),
                 ),
               ),
-              if (user?.username != null && user!.username!.isNotEmpty)
+              if (user?.publicId != null && user!.publicId!.isNotEmpty)
                 Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '@${user.username}',
-                    style: TextStyle(
-                      color: theme.colorScheme.primary,
-                      fontSize: 14,
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'ID: ${user.publicId}',
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.primary,
+                        letterSpacing: 1.5,
+                      ),
                     ),
                   ),
                 ),
-              if (user?.phone != null)
+              if (user?.aiName != null && user!.aiName!.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
-                    user!.phone!,
+                    l.avatarNameLabel(user.aiName!),
                     style: TextStyle(
-                      color: Colors.grey.shade500,
-                      fontFamily: 'monospace',
+                      color: theme.colorScheme.primary.withValues(alpha: 0.7),
                       fontSize: 13,
+                      fontWeight: FontWeight.w500,
                     ),
+                    textAlign: TextAlign.center,
                   ),
                 ),
               if (user?.bio != null && user!.bio!.isNotEmpty)
@@ -132,25 +141,25 @@ class SettingsBody extends ConsumerWidget {
                 children: [
                   OutlinedButton.icon(
                     onPressed: () {
-                      final login = user?.phone ?? user?.id ?? '';
-                      Clipboard.setData(ClipboardData(text: login));
+                      final pid = user?.publicId ?? user?.id ?? '';
+                      Clipboard.setData(ClipboardData(text: pid));
                       ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Логин скопирован')),
+                        SnackBar(content: Text(l.idCopied)),
                       );
                     },
-                    icon: const Icon(Icons.copy, size: 16),
-                    label: const Text('Скопировать логин'),
+                    icon: const Icon(CupertinoIcons.doc_on_doc, size: 16),
+                    label: Text(l.copyId),
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton.icon(
                     onPressed: () {
-                      final login = user?.phone ?? user?.id ?? '';
+                      final pid = user?.publicId ?? user?.id ?? '';
                       SharePlus.instance.share(
-                        ShareParams(text: 'Мой логин в Demos: $login'),
+                        ShareParams(text: l.myIdInDemos(pid)),
                       );
                     },
-                    icon: const Icon(Icons.share, size: 16),
-                    label: const Text('Поделиться'),
+                    icon: const Icon(CupertinoIcons.share, size: 16),
+                    label: Text(l.shareId),
                   ),
                 ],
               ),
@@ -160,28 +169,28 @@ class SettingsBody extends ConsumerWidget {
 
         SettingsGroup(children: [
           SettingsTile(
-            icon: Icons.person_outline,
-            title: 'Редактировать профиль',
+            icon: CupertinoIcons.person,
+            title: l.editProfile,
             onTap: () => context.push('/settings/edit-profile'),
           ),
           SettingsTile(
-            icon: Icons.shield_outlined,
-            title: 'Конфиденциальность',
+            icon: CupertinoIcons.shield,
+            title: l.privacy,
             onTap: () => context.push('/settings/privacy'),
           ),
           SettingsTile(
-            icon: Icons.notifications_outlined,
-            title: 'Уведомления',
+            icon: CupertinoIcons.bell,
+            title: l.notifications,
             onTap: () => context.push('/settings/notifications'),
           ),
           SettingsTile(
-            icon: Icons.chat_bubble_outline,
-            title: 'Беседы',
+            icon: CupertinoIcons.chat_bubble_2,
+            title: l.conversations,
             onTap: () => context.push('/settings/conversations'),
           ),
           SettingsTile(
-            icon: Icons.mail_outline,
-            title: 'Запросы сообщений',
+            icon: CupertinoIcons.mail,
+            title: l.messageRequests,
             onTap: () => context.push('/settings/message-requests'),
           ),
         ]),
@@ -190,25 +199,31 @@ class SettingsBody extends ConsumerWidget {
 
         SettingsGroup(children: [
           SettingsTile(
-            icon: Icons.palette_outlined,
-            title: 'Внешний вид',
+            icon: CupertinoIcons.paintbrush,
+            title: l.appearance,
             trailing: Text(
-              _themeName(themeState.type),
+              _themeName(themeState.type, l),
               style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
             ),
             onTap: () => context.push('/settings/appearance'),
           ),
           SettingsTile(
-            icon: Icons.lock_outline,
-            title: 'Блокировка приложения',
-            trailing: Switch(
-              value: false,
-              onChanged: (_) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Функция в разработке')),
-                );
-              },
+            icon: CupertinoIcons.globe,
+            title: l.language,
+            trailing: Text(
+              currentLocale.languageCode == 'ru' ? l.languageRussian : l.languageEnglish,
+              style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
             ),
+            onTap: () => _showLanguagePicker(context, ref),
+          ),
+          SettingsTile(
+            icon: CupertinoIcons.lock,
+            title: l.appLock,
+            trailing: Switch(
+              value: LocalStorage.getBlockApp(),
+              onChanged: (_) => context.push('/settings/privacy'),
+            ),
+            onTap: () => context.push('/settings/privacy'),
           ),
         ]),
 
@@ -216,19 +231,19 @@ class SettingsBody extends ConsumerWidget {
 
         SettingsGroup(children: [
           SettingsTile(
-            icon: Icons.help_outline,
-            title: 'Помощь',
+            icon: CupertinoIcons.question_circle,
+            title: l.help,
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Раздел помощи в разработке')),
+              SnackBar(content: Text(l.helpInDevelopment)),
             ),
           ),
           SettingsTile(
-            icon: Icons.person_add_outlined,
-            title: 'Пригласить друга',
+            icon: CupertinoIcons.person_badge_plus,
+            title: l.inviteFriend,
             onTap: () {
               final login = user?.phone ?? user?.id ?? '';
               SharePlus.instance.share(ShareParams(
-                text: 'Присоединяйся к Demos! Мой логин: $login',
+                text: l.inviteText(login),
               ));
             },
           ),
@@ -238,32 +253,32 @@ class SettingsBody extends ConsumerWidget {
 
         SettingsGroup(children: [
           SettingsTile(
-            icon: Icons.vpn_key_outlined,
-            title: 'Пересоздать ключи шифрования',
+            icon: CupertinoIcons.lock_rotation,
+            title: l.regenerateKeys,
             onTap: () {
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Ключи шифрования обновлены')),
+                SnackBar(content: Text(l.keysUpdated)),
               );
             },
           ),
           SettingsTile(
-            icon: Icons.logout,
-            title: 'Выйти',
+            icon: CupertinoIcons.square_arrow_right,
+            title: l.logout,
             color: Colors.orange,
             onTap: () async {
               final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (ctx) => AlertDialog(
-                  title: const Text('Выход'),
-                  content: const Text('Вы уверены, что хотите выйти?'),
+                  title: Text(l.logoutTitle),
+                  content: Text(l.logoutConfirm),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx, false),
-                      child: const Text('Отмена'),
+                      child: Text(l.cancel),
                     ),
                     FilledButton(
                       onPressed: () => Navigator.pop(ctx, true),
-                      child: const Text('Выйти'),
+                      child: Text(l.logout),
                     ),
                   ],
                 ),
@@ -275,17 +290,17 @@ class SettingsBody extends ConsumerWidget {
             },
           ),
           SettingsTile(
-            icon: Icons.delete_forever,
-            title: 'Очистить все данные',
+            icon: CupertinoIcons.trash,
+            title: l.clearAllData,
             color: Colors.red,
-            onTap: () => _confirmDeleteAccount(context, ref),
+            onTap: () => _confirmDeleteAccount(context, ref, l),
           ),
         ]),
 
         const SizedBox(height: 24),
         Center(
           child: Text(
-            'Demos Chat 1.0.3 — Сквозное шифрование (E2EE)',
+            l.appVersion,
             style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
           ),
         ),
@@ -294,31 +309,73 @@ class SettingsBody extends ConsumerWidget {
     );
   }
 
-  static String _themeName(AppThemeType type) {
+  static String _themeName(AppThemeType type, AppLocalizations l) {
     switch (type) {
       case AppThemeType.light:
-        return 'Классическая светлая';
+        return l.themeLight;
       case AppThemeType.dark:
-        return 'Классическая тёмная';
-      case AppThemeType.midnight:
-        return 'Океанская тёмная';
-      case AppThemeType.amoled:
-        return 'Океанская светлая';
+        return l.themeDark;
     }
   }
 
-  static void _confirmDeleteAccount(BuildContext context, WidgetRef ref) {
+  static void _showLanguagePicker(BuildContext context, WidgetRef ref) {
+    final l = AppLocalizations.of(context)!;
+    final currentLocale = ref.read(localeProvider);
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                l.language,
+                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ),
+            ListTile(
+              leading: const Text('🇷🇺', style: TextStyle(fontSize: 24)),
+              title: const Text('Русский'),
+              trailing: currentLocale.languageCode == 'ru'
+                  ? Icon(CupertinoIcons.checkmark_alt, color: Theme.of(ctx).colorScheme.primary)
+                  : null,
+              onTap: () {
+                ref.read(localeProvider.notifier).setLocale('ru');
+                Navigator.pop(ctx);
+              },
+            ),
+            ListTile(
+              leading: const Text('🇬🇧', style: TextStyle(fontSize: 24)),
+              title: const Text('English'),
+              trailing: currentLocale.languageCode == 'en'
+                  ? Icon(CupertinoIcons.checkmark_alt, color: Theme.of(ctx).colorScheme.primary)
+                  : null,
+              onTap: () {
+                ref.read(localeProvider.notifier).setLocale('en');
+                Navigator.pop(ctx);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static void _confirmDeleteAccount(BuildContext context, WidgetRef ref, AppLocalizations l) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Очистить все данные'),
-        content: const Text(
-          'Это действие необратимо. Все ваши данные будут безвозвратно удалены.',
-        ),
+        title: Text(l.clearAllData),
+        content: Text(l.clearAllDataConfirm),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Отмена'),
+            child: Text(l.cancel),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: Colors.red),
@@ -330,7 +387,7 @@ class SettingsBody extends ConsumerWidget {
               WsClient().disconnect();
               ref.read(authStateProvider.notifier).logout();
             },
-            child: const Text('Удалить'),
+            child: Text(l.delete),
           ),
         ],
       ),
@@ -371,10 +428,15 @@ class SettingsTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final defaultIconColor = isDark ? Colors.white70 : const Color(0xFF333333);
+    final defaultTextColor = isDark ? Colors.white : const Color(0xFF1A1A1A);
+    final trailColor = isDark ? Colors.white38 : const Color(0xFF999999);
+
     return ListTile(
-      leading: Icon(icon, color: color),
-      title: Text(title, style: color != null ? TextStyle(color: color) : null),
-      trailing: trailing ?? const Icon(Icons.chevron_right, size: 20),
+      leading: Icon(icon, color: color ?? defaultIconColor),
+      title: Text(title, style: TextStyle(color: color ?? defaultTextColor)),
+      trailing: trailing ?? Icon(CupertinoIcons.chevron_right, size: 16, color: trailColor),
       onTap: onTap,
     );
   }

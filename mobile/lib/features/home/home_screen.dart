@@ -1,18 +1,29 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
+
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import '../../core/constants.dart';
 import '../../core/providers.dart';
+import '../../core/widgets/user_avatar.dart';
+import '../../core/widgets/telepathy_icon.dart';
+import '../../core/widgets/telegram_pattern_background.dart';
 import '../../core/models/conversation_model.dart';
 import '../../core/models/message_model.dart';
 import '../../core/network/api_client.dart';
+import '../../core/services/user_search_service.dart';
+import '../settings/settings_screen.dart';
 import '../../core/network/ws_client.dart';
 import '../../core/theme/app_colors.dart';
-import '../settings/settings_screen.dart';
+import '../../core/storage/local_storage.dart';
+import '../../core/e2ee/key_manager.dart';
+import '../../core/e2ee/crypto_service.dart';
+import '../../l10n/app_localizations.dart';
+import 'package:libsignal_protocol_dart/libsignal_protocol_dart.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -27,14 +38,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   bool _isSearching = false;
   final _searchController = TextEditingController();
 
-  // Multi-select
   final Set<String> _selectedIds = {};
   bool get _isSelecting => _selectedIds.isNotEmpty;
 
-  // Connection
   bool _isConnected = false;
 
   Timer? _refreshTimer;
+
+  // Server search
+  List<Map<String, dynamic>> _serverResults = [];
+  bool _serverSearchLoading = false;
+  Timer? _searchDebounce;
 
   @override
   void initState() {
@@ -44,15 +58,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
       ref.read(conversationsProvider.notifier).load();
       _connectWebSocket();
     });
-    _refreshTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      ref.read(conversationsProvider.notifier).load();
+    _refreshTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      ref.read(conversationsProvider.notifier).loadSilently();
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      ref.read(conversationsProvider.notifier).load();
+      final ws = WsClient();
+      if (!ws.isConnected) {
+        _connectWebSocket();
+      }
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          ref.read(conversationsProvider.notifier).loadSilently();
+        }
+      });
     }
   }
 
@@ -63,18 +85,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
       if (!mounted) return;
       setState(() => _isConnected = true);
       final userId = ref.read(authStateProvider).user?.id;
-      ws.subscribe('/user/$userId/queue/messages', (frame) {
+      ws.subscribe('/user/$userId/queue/messages', (frame) async {
         if (frame.body == null) return;
+        if (!mounted) return;
         final data = jsonDecode(frame.body!);
         if (data is Map<String, dynamic>) {
+          final type = data['type'] as String?;
+          if (type == 'group_member_added' || type == 'group_member_removed' || type == 'group_updated' || type == 'trust_updated') {
+            ref.read(conversationsProvider.notifier).load();
+            return;
+          }
           if (data.containsKey('clientMessageId')) {
             final msg = MessageModel.fromJson(data);
-            ref.read(conversationsProvider.notifier).addOrUpdateFromMessage(msg);
+            if (!mounted) return;
+            final isFromOther = msg.senderId != userId;
+            if (msg.encrypted && msg.text != null && msg.text!.isNotEmpty) {
+              await _decryptForPreview(msg);
+            }
+            ref.read(conversationsProvider.notifier).addOrUpdateFromMessage(msg, incrementUnread: isFromOther);
           }
         }
       });
 
-      // Subscribe to incoming call events
+      ws.subscribe('/user/$userId/queue/status', (frame) {
+        if (frame.body == null) return;
+        if (!mounted) return;
+        final data = jsonDecode(frame.body!);
+        if (data is Map<String, dynamic>) {
+          final type = data['type'] as String?;
+          final convId = data['conversationId'] as String?;
+          if (type == 'READ' && convId != null && mounted) {
+            ref.read(conversationsProvider.notifier).updateLastMessageStatus(convId, 'READ');
+          }
+        }
+      });
+
+      ws.subscribe('/user/$userId/queue/presence', (frame) {
+        if (frame.body == null) return;
+        if (!mounted) return;
+        final data = jsonDecode(frame.body!);
+        if (data is Map<String, dynamic>) {
+          final type = data['type'] as String?;
+          final uid = data['userId'] as String?;
+          if (type != null && uid != null && mounted) {
+            final online = type == 'USER_ONLINE';
+            ref.read(conversationsProvider.notifier).updateParticipantOnline(uid, online);
+          }
+        }
+      });
+
       ws.subscribe('/user/$userId/queue/call', (frame) {
         if (frame.body == null) return;
         final data = jsonDecode(frame.body!);
@@ -88,7 +147,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
             String callerName = eventData?['callerName'] as String? ??
                 data['callerName'] as String? ?? '';
             if (callerName.isEmpty) {
-              callerName = 'Неизвестный';
+              callerName = AppLocalizations.of(context)!.unknown;
             }
             if (mounted && callId.isNotEmpty && callerId != userId) {
               context.push(
@@ -107,12 +166,118 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
     }
   }
 
+  Future<void> _decryptForPreview(MessageModel msg) async {
+    if (msg.text == null || msg.text!.isEmpty) return;
+
+    final convId = msg.conversationId;
+
+    // Already cached by message ID — just update conversation preview
+    if (msg.id.isNotEmpty) {
+      final cached = LocalStorage.getDecryptedMessage(msg.id);
+      if (cached != null) {
+        await LocalStorage.cacheConversationPreview(convId, cached);
+        return;
+      }
+    }
+
+    final userId = ref.read(authStateProvider).user?.id ?? '';
+
+    // Own message — check clientMessageId cache
+    if (msg.senderId == userId) {
+      final cached = LocalStorage.getCachedPlaintext(msg.clientMessageId);
+      if (cached != null) {
+        if (msg.id.isNotEmpty) LocalStorage.cacheDecryptedMessage(msg.id, cached);
+        await LocalStorage.cacheConversationPreview(convId, cached);
+      }
+      return;
+    }
+
+    // Other party's message — decrypt with Signal Protocol
+    if (!E2eeKeyManager().isInitialized) return;
+    final crypto = E2eeCryptoService();
+    var plaintext = await crypto.decryptMessage(
+      msg.senderId, msg.text!, CiphertextMessage.prekeyType,
+    );
+    plaintext ??= await crypto.decryptMessage(
+      msg.senderId, msg.text!, CiphertextMessage.whisperType,
+    );
+    if (plaintext != null) {
+      if (msg.id.isNotEmpty) await LocalStorage.cacheDecryptedMessage(msg.id, plaintext);
+      await LocalStorage.cacheConversationPreview(convId, plaintext);
+    }
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     _refreshTimer?.cancel();
+    _searchDebounce?.cancel();
     super.dispose();
+  }
+
+  void _onSearchChanged(String value) {
+    setState(() => _searchQuery = value.toLowerCase());
+    _searchDebounce?.cancel();
+    if (value.length >= 2) {
+      _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+        _searchServer(value);
+      });
+    } else {
+      setState(() {
+        _serverResults = [];
+        _serverSearchLoading = false;
+      });
+    }
+  }
+
+  Future<void> _searchServer(String query) async {
+    if (!mounted) return;
+    setState(() => _serverSearchLoading = true);
+    try {
+      final results = await UserSearchService.search(query);
+      if (!mounted) return;
+      setState(() => _serverResults = results);
+    } catch (_) {}
+    if (mounted) setState(() => _serverSearchLoading = false);
+  }
+
+  Future<void> _openOrCreateChat(String participantId, String name, String? avatar, {String? searchMethod}) async {
+    final convState = ref.read(conversationsProvider);
+    final conversations = convState.valueOrNull ?? [];
+    final existing = conversations.where((c) => c.participant?.id == participantId).toList();
+
+    if (existing.isNotEmpty) {
+      _openConversation(existing.first);
+      return;
+    }
+
+    try {
+      final res = await ApiClient().dio.post('/conversations', data: {
+        'participantId': participantId,
+        if (searchMethod != null) 'searchMethod': searchMethod,
+      });
+      final convId = res.data['id'] as String;
+      ref.read(conversationsProvider.notifier).load();
+      if (mounted) {
+        _exitSearch();
+        context.push(
+          '/conversation/$convId?name=${Uri.encodeComponent(name)}'
+          '&participantId=$participantId'
+          '${avatar != null ? '&avatar=${Uri.encodeComponent(avatar)}' : ''}',
+        );
+      }
+    } catch (_) {}
+  }
+
+  void _exitSearch() {
+    setState(() {
+      _isSearching = false;
+      _searchController.clear();
+      _searchQuery = '';
+      _serverResults = [];
+      _serverSearchLoading = false;
+    });
   }
 
   void _toggleSelect(String id) {
@@ -131,57 +296,55 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final user = ref.watch(authStateProvider).user;
+    final l = AppLocalizations.of(context)!;
 
     return Scaffold(
       appBar: _currentIndex == 3
-          ? AppBar(title: const Text('Настройки'), centerTitle: true)
+          ? AppBar(title: Text(l.settingsTitle), centerTitle: true)
           : (_isSelecting
               ? _buildSelectionAppBar(theme)
               : _buildNormalAppBar(theme, user)),
-      body: IndexedStack(
-        index: _currentIndex,
-        children: [
-          _buildChatList(),
-          _buildCallHistoryTab(),
-          _buildTelepathyTab(),
-          const SettingsBody(),
-        ],
+      body: TelegramPatternBackground(
+        child: IndexedStack(
+          index: _currentIndex,
+          children: [
+            _buildChatList(),
+            _buildCallHistoryTab(),
+            _buildTelepathyTab(),
+            const SettingsBody(),
+          ],
+        ),
       ),
-      floatingActionButton: _currentIndex == 0 && !_isSelecting
-          ? FloatingActionButton(
-              onPressed: () => _showNewChatSheet(context),
-              child: const Icon(Icons.add),
-            )
-          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (i) {
           _clearSelection();
+          if (_isSearching) _exitSearch();
           setState(() => _currentIndex = i);
           if (i == 1) {
             ref.read(callHistoryProvider.notifier).load();
           }
         },
-        destinations: const [
+        destinations: [
           NavigationDestination(
-            icon: Icon(Icons.chat_bubble_outline),
-            selectedIcon: Icon(Icons.chat_bubble),
-            label: 'Сообщения',
+            icon: const Icon(CupertinoIcons.chat_bubble),
+            selectedIcon: const Icon(CupertinoIcons.chat_bubble_fill),
+            label: l.tabMessages,
           ),
           NavigationDestination(
-            icon: Icon(Icons.phone_outlined),
-            selectedIcon: Icon(Icons.phone),
-            label: 'Звонки',
+            icon: const Icon(CupertinoIcons.phone),
+            selectedIcon: const Icon(CupertinoIcons.phone_fill),
+            label: l.tabCalls,
           ),
           NavigationDestination(
-            icon: Icon(Icons.psychology_outlined),
-            selectedIcon: Icon(Icons.psychology),
-            label: 'Телепатия',
+            icon: const TelepathyIcon(size: 28, filled: false),
+            selectedIcon: const TelepathyIcon(size: 28, filled: true),
+            label: l.tabTelepathy,
           ),
           NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings),
-            label: 'Настройки',
+            icon: const Icon(CupertinoIcons.gear),
+            selectedIcon: const Icon(CupertinoIcons.gear_solid),
+            label: l.tabSettings,
           ),
         ],
       ),
@@ -189,33 +352,30 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   }
 
   PreferredSizeWidget _buildNormalAppBar(ThemeData theme, dynamic user) {
+    final l = AppLocalizations.of(context)!;
     if (_isSearching) {
       return AppBar(
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => setState(() {
-            _isSearching = false;
-            _searchController.clear();
-            _searchQuery = '';
-          }),
+          icon: const Icon(CupertinoIcons.back, size: 22),
+          onPressed: _exitSearch,
         ),
         title: TextField(
           controller: _searchController,
           autofocus: true,
-          decoration: const InputDecoration(
-            hintText: 'Поиск...',
+          decoration: InputDecoration(
+            hintText: l.searchHint,
             border: InputBorder.none,
           ),
-          onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
+          onChanged: _onSearchChanged,
         ),
         actions: [
           if (_searchController.text.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.close),
-              onPressed: () => setState(() {
+              icon: const Icon(CupertinoIcons.xmark, size: 20),
+              onPressed: () {
                 _searchController.clear();
-                _searchQuery = '';
-              }),
+                _onSearchChanged('');
+              },
             ),
         ],
       );
@@ -235,8 +395,64 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
       centerTitle: true,
       actions: [
         IconButton(
-          icon: const Icon(Icons.search),
+          icon: const Icon(CupertinoIcons.search, size: 22),
           onPressed: () => setState(() => _isSearching = true),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(CupertinoIcons.ellipsis_vertical, size: 20),
+          onSelected: (value) {
+            switch (value) {
+              case 'new_group':
+                context.push('/groups/create');
+              case 'dark_theme':
+                ref.read(themeProvider.notifier).toggle();
+              case 'wallet':
+                // TODO: navigate to wallet
+                break;
+            }
+          },
+          itemBuilder: (ctx) {
+            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+            final tc = isDark ? Colors.white : const Color(0xFF1A1A1A);
+            return [
+            PopupMenuItem(
+              value: 'new_group',
+              child: Row(
+                children: [
+                  Icon(Icons.group_add_rounded, size: 22,
+                      color: const Color(0xFF2196F3)),
+                  const SizedBox(width: 12),
+                  Text(l.newGroup, style: TextStyle(color: tc)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'dark_theme',
+              child: Row(
+                children: [
+                  Icon(
+                    isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+                    size: 22,
+                    color: isDark ? const Color(0xFFFFC107) : const Color(0xFF5C6BC0),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(isDark ? l.lightThemeMenu : l.darkThemeMenu,
+                      style: TextStyle(color: tc)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'wallet',
+              child: Row(
+                children: [
+                  Icon(Icons.account_balance_wallet_rounded, size: 22,
+                      color: const Color(0xFF4CAF50)),
+                  const SizedBox(width: 12),
+                  Text(l.wallet, style: TextStyle(color: tc)),
+                ],
+              ),
+            ),
+          ];},
         ),
         if (!_isConnected)
           Padding(
@@ -257,34 +473,39 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   }
 
   PreferredSizeWidget _buildSelectionAppBar(ThemeData theme) {
+    final l = AppLocalizations.of(context)!;
     return AppBar(
       leading: IconButton(
-        icon: const Icon(Icons.close),
+        icon: const Icon(CupertinoIcons.xmark, size: 20),
         onPressed: _clearSelection,
       ),
       title: Text('${_selectedIds.length}'),
       actions: [
         IconButton(
-          icon: const Icon(Icons.push_pin_outlined),
-          tooltip: 'Закрепить',
+          icon: const Icon(CupertinoIcons.pin, size: 20),
+          tooltip: l.pinTooltip,
           onPressed: () => _bulkAction('pin'),
         ),
         IconButton(
-          icon: const Icon(Icons.notifications_off_outlined),
-          tooltip: 'Без звука',
+          icon: const Icon(CupertinoIcons.bell_slash, size: 20),
+          tooltip: l.muteTooltip,
           onPressed: () => _bulkAction('mute'),
         ),
         IconButton(
-          icon: const Icon(Icons.delete_outline),
-          tooltip: 'Удалить',
+          icon: const Icon(CupertinoIcons.trash, size: 20),
+          tooltip: l.deleteTooltip,
           onPressed: () => _bulkAction('delete'),
         ),
         PopupMenuButton<String>(
           onSelected: (v) => _bulkAction(v),
-          itemBuilder: (_) => [
-            const PopupMenuItem(value: 'read', child: Row(children: [Icon(Icons.visibility_outlined, size: 20), SizedBox(width: 12), Text('Пометить прочитанным')])),
-            const PopupMenuItem(value: 'clear', child: Row(children: [Icon(Icons.history, size: 20, color: Colors.red), SizedBox(width: 12), Text('Очистить историю', style: TextStyle(color: Colors.red))])),
-          ],
+          itemBuilder: (ctx) {
+            final isDark = Theme.of(ctx).brightness == Brightness.dark;
+            final ic = isDark ? Colors.white70 : const Color(0xFF333333);
+            final tc = isDark ? Colors.white : const Color(0xFF1A1A1A);
+            return [
+            PopupMenuItem(value: 'read', child: Row(children: [Icon(CupertinoIcons.eye, size: 20, color: ic), const SizedBox(width: 12), Text(l.markAsRead, style: TextStyle(color: tc))])),
+            PopupMenuItem(value: 'clear', child: Row(children: [Icon(CupertinoIcons.paintbrush, size: 20, color: Colors.red), const SizedBox(width: 12), Text(l.clearHistory, style: TextStyle(color: Colors.red))])),
+          ];},
         ),
       ],
     );
@@ -293,10 +514,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   Future<void> _bulkAction(String action) async {
     final api = ApiClient().dio;
     final ids = Set<String>.from(_selectedIds);
+    final conversations = ref.read(conversationsProvider).valueOrNull ?? [];
     _clearSelection();
 
     for (final id in ids) {
       try {
+        final conv = conversations.where((c) => c.id == id).firstOrNull;
+        final isGroup = conv?.isGroup ?? false;
+
         switch (action) {
           case 'pin':
             await api.patch('/conversations/$id/pin?pinned=true');
@@ -305,12 +530,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
             await api.patch('/conversations/$id/mute?muted=true');
             break;
           case 'delete':
-            await api.delete('/conversations/$id');
+            if (isGroup) {
+              await api.post('/groups/$id/leave');
+            } else {
+              await api.delete('/conversations/$id');
+            }
             break;
           case 'clear':
             await api.delete('/conversations/$id/messages');
             break;
           case 'read':
+            await api.post('/conversations/$id/read');
             break;
         }
       } catch (_) {}
@@ -320,21 +550,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
 
   Widget _buildUserAvatar(dynamic user, double radius) {
     final name = user?.name ?? '';
-    return CircleAvatar(
+    return UserAvatar(
+      avatarUrl: user?.avatarUrl as String?,
+      name: name,
       radius: radius,
-      backgroundColor: AppColors.accentColors[0].withValues(alpha: 0.2),
-      backgroundImage: user?.avatarUrl != null ? NetworkImage(user!.avatarUrl!) : null,
-      child: user?.avatarUrl == null
-          ? Text(
-              name.isNotEmpty ? name[0].toUpperCase() : '?',
-              style: TextStyle(fontSize: radius * 0.9, fontWeight: FontWeight.w600),
-            )
-          : null,
     );
   }
 
   Widget _buildChatList() {
     final convState = ref.watch(conversationsProvider);
+    final l = AppLocalizations.of(context)!;
+
+    if (_isSearching && _searchQuery.isNotEmpty) {
+      return _buildSearchResults(convState);
+    }
 
     return convState.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -342,81 +571,204 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Не удалось загрузить чаты'),
+            Text(l.failedToLoadChats),
             const SizedBox(height: 8),
             FilledButton(
               onPressed: () => ref.read(conversationsProvider.notifier).load(),
-              child: const Text('Повторить'),
+              child: Text(l.retry),
             ),
           ],
         ),
       ),
-      data: (conversations) {
-        var filtered = conversations;
-        if (_searchQuery.isNotEmpty) {
-          filtered = conversations
-              .where((c) => c.participant.name.toLowerCase().contains(_searchQuery))
-              .toList();
-        }
+      data: (conversations) => _buildConversationList(conversations),
+    );
+  }
 
-        final pinned = filtered.where((c) => c.isPinned).toList();
-        final unpinned = filtered.where((c) => !c.isPinned).toList();
-        final sorted = [...pinned, ...unpinned];
+  Widget _buildConversationList(List<ConversationModel> conversations) {
+    final l = AppLocalizations.of(context)!;
+    final pinned = conversations.where((c) => c.isPinned).toList();
+    final unpinned = conversations.where((c) => !c.isPinned).toList();
+    final sorted = [...pinned, ...unpinned];
 
-        if (sorted.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey.shade400),
-                const SizedBox(height: 16),
-                Text('Чатов пока нет',
-                    style: TextStyle(color: Colors.grey.shade500, fontSize: 16, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 4),
-                Text('Начните беседу, чтобы отправить первое сообщение',
-                    style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
-                    textAlign: TextAlign.center),
-              ],
-            ),
-          );
-        }
+    if (sorted.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(CupertinoIcons.chat_bubble, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(l.noChatsYet,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Text(l.findContactViaSearch,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
+                textAlign: TextAlign.center),
+          ],
+        ),
+      );
+    }
 
-        return RefreshIndicator(
-          onRefresh: () => ref.read(conversationsProvider.notifier).load(),
-          child: ListView.builder(
-            itemCount: sorted.length,
-            itemBuilder: (context, index) {
-              final conv = sorted[index];
-              final isSelected = _selectedIds.contains(conv.id);
-              return _ConversationTile(
-                conversation: conv,
-                isSelected: isSelected,
-                isSelecting: _isSelecting,
-                onTap: () {
-                  if (_isSelecting) {
-                    _toggleSelect(conv.id);
-                  } else {
-                    _openConversation(conv);
-                  }
-                },
-                onLongPress: () {
-                  HapticFeedback.mediumImpact();
-                  if (_isSelecting) {
-                    _toggleSelect(conv.id);
-                  } else {
-                    _toggleSelect(conv.id);
-                  }
-                },
-              );
+    return RefreshIndicator(
+      onRefresh: () => ref.read(conversationsProvider.notifier).load(),
+      child: ListView.builder(
+        itemCount: sorted.length,
+        itemBuilder: (context, index) {
+          final conv = sorted[index];
+          final isSelected = _selectedIds.contains(conv.id);
+          return _ConversationTile(
+            conversation: conv,
+            isSelected: isSelected,
+            isSelecting: _isSelecting,
+            onTap: () {
+              if (_isSelecting) {
+                _toggleSelect(conv.id);
+              } else {
+                _openConversation(conv);
+              }
             },
+            onLongPress: () {
+              HapticFeedback.mediumImpact();
+              _toggleSelect(conv.id);
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSearchResults(AsyncValue<List<ConversationModel>> convState) {
+    final theme = Theme.of(context);
+    final l = AppLocalizations.of(context)!;
+    final conversations = convState.valueOrNull ?? [];
+
+    final q = _searchQuery.toLowerCase();
+    final matchingChats = conversations
+        .where((c) {
+          final name = c.displayName.toLowerCase();
+          final pubId = c.participant?.publicId?.toLowerCase() ?? '';
+          return name.contains(q) || pubId.contains(q);
+        })
+        .toList();
+
+    final matchingChatUserIds = matchingChats
+        .where((c) => c.participant != null)
+        .map((c) => c.participant!.id)
+        .toSet();
+    final newUsers = _serverResults
+        .where((u) => !matchingChatUserIds.contains(u['id'] as String))
+        .toList();
+
+    final hasChats = matchingChats.isNotEmpty;
+    final hasUsers = newUsers.isNotEmpty;
+    final hasNothing = !hasChats && !hasUsers && !_serverSearchLoading;
+
+    return ListView(
+      children: [
+        if (hasChats) ...[
+          _SectionHeader(title: l.chatsSection, theme: theme),
+          ...matchingChats.map((conv) => _ConversationTile(
+            conversation: conv,
+            isSelected: false,
+            isSelecting: false,
+            onTap: () {
+              _exitSearch();
+              _openConversation(conv);
+            },
+            onLongPress: () {},
+          )),
+        ],
+        if (_serverSearchLoading)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
           ),
-        );
-      },
+        if (hasUsers) ...[
+          _SectionHeader(title: l.usersSection, theme: theme),
+          ...newUsers.map((user) {
+            final matchType = user['matchType'] as String? ?? 'name';
+            final isIdMatch = matchType == 'publicId';
+            final isAiNameMatch = matchType == 'aiName';
+            final String displayText;
+            if (isIdMatch) {
+              displayText = user['publicId'] as String? ?? '';
+            } else if (isAiNameMatch) {
+              displayText = user['aiName'] as String? ?? '';
+            } else {
+              displayText = user['name'] as String? ?? user['aiName'] as String? ?? '';
+            }
+
+            final String subtitle;
+            if (isIdMatch) {
+              subtitle = l.foundById;
+            } else if (isAiNameMatch) {
+              subtitle = l.foundByAvatarName;
+            } else {
+              subtitle = l.foundByNickname;
+            }
+
+            return ListTile(
+              leading: CircleAvatar(
+                radius: 24,
+                backgroundColor: isIdMatch
+                    ? theme.colorScheme.primary.withAlpha(40)
+                    : Colors.teal.withAlpha(40),
+                child: Icon(
+                  isIdMatch ? CupertinoIcons.number : CupertinoIcons.person,
+                  size: 22,
+                  color: isIdMatch ? theme.colorScheme.primary : Colors.teal,
+                ),
+              ),
+              title: Text(
+                displayText,
+                style: isIdMatch
+                    ? TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.primary,
+                      )
+                    : const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                subtitle,
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+              ),
+              trailing: user['isOnline'] == true
+                  ? Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: AppColors.onlineGreen,
+                        shape: BoxShape.circle,
+                      ),
+                    )
+                  : null,
+              onTap: () => _openOrCreateChat(
+                user['id'] as String,
+                displayText,
+                null,
+                searchMethod: matchType,
+              ),
+            );
+          }),
+        ],
+        if (hasNothing)
+          Padding(
+            padding: const EdgeInsets.all(32),
+            child: Center(
+              child: Text(
+                l.nothingFound,
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 15),
+              ),
+            ),
+          ),
+      ],
     );
   }
 
   Widget _buildCallHistoryTab() {
     final callsState = ref.watch(callHistoryProvider);
+    final l = AppLocalizations.of(context)!;
 
     return callsState.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -424,11 +776,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Не удалось загрузить историю звонков'),
+            Text(l.failedToLoadCalls),
             const SizedBox(height: 8),
             FilledButton(
               onPressed: () => ref.read(callHistoryProvider.notifier).load(),
-              child: const Text('Повторить'),
+              child: Text(l.retry),
             ),
           ],
         ),
@@ -439,12 +791,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.phone_outlined, size: 64, color: Colors.grey.shade400),
+                Icon(CupertinoIcons.phone, size: 64, color: Colors.grey.shade400),
                 const SizedBox(height: 16),
-                Text('Звонков пока нет',
+                Text(l.noCallsYet,
                     style: TextStyle(color: Colors.grey.shade500, fontSize: 16, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 4),
-                Text('Здесь будет история ваших звонков',
+                Text(l.callHistoryHere,
                     style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
                     textAlign: TextAlign.center),
               ],
@@ -481,60 +833,71 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
                 durationStr = '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
               }
 
-              return ListTile(
-                leading: CircleAvatar(
-                  backgroundImage: call.participant.avatarUrl != null
-                      ? NetworkImage(call.participant.avatarUrl!)
-                      : null,
-                  child: call.participant.avatarUrl == null
-                      ? Text(
-                          call.participant.name.isNotEmpty
-                              ? call.participant.name[0].toUpperCase()
-                              : '?',
-                          style: const TextStyle(fontSize: 20),
-                        )
-                      : null,
+              final isDark = Theme.of(context).brightness == Brightness.dark;
+              final titleColor = isDark ? Colors.white : Colors.black87;
+              final subtitleColor = isDark ? Colors.grey.shade400 : Colors.grey.shade600;
+              final cardColor = isDark
+                  ? Colors.black.withValues(alpha: 0.35)
+                  : Colors.white.withValues(alpha: 0.7);
+
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                title: Text(
-                  call.participant.name,
-                  style: TextStyle(
-                    fontWeight: FontWeight.w600,
-                    color: isMissed ? Colors.red : null,
+                child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+                  leading: UserAvatar(
+                    avatarUrl: call.participant.avatarUrl,
+                    name: call.participant.name,
+                    radius: 24,
                   ),
-                ),
-                subtitle: Row(
-                  children: [
-                    Icon(
-                      isMissed ? Icons.call_missed : Icons.call_made,
-                      size: 14,
-                      color: isMissed ? Colors.red : Colors.green,
+                  title: Text(
+                    call.participant.name,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isMissed ? Colors.red : titleColor,
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      isVideo ? 'Видеозвонок' : 'Аудиозвонок',
-                      style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
-                    ),
-                    if (durationStr.isNotEmpty) ...[
-                      Text(' • ', style: TextStyle(color: Colors.grey.shade500)),
-                      Text(durationStr, style: TextStyle(fontSize: 13, color: Colors.grey.shade500)),
-                    ],
-                  ],
-                ),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (timeStr.isNotEmpty)
-                      Text(timeStr, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(isVideo ? Icons.videocam : Icons.phone, size: 20),
-                      onPressed: () => context.push(
-                        '/call?calleeId=${call.participant.id}'
-                        '&calleeName=${Uri.encodeComponent(call.participant.name)}'
-                        '&callType=${call.callType}',
+                  ),
+                  subtitle: Row(
+                    children: [
+                      Icon(
+                        isMissed ? CupertinoIcons.phone_down : CupertinoIcons.phone_arrow_up_right,
+                        size: 14,
+                        color: isMissed ? Colors.red : Colors.green,
                       ),
-                    ),
-                  ],
+                      const SizedBox(width: 4),
+                      Text(
+                        isVideo ? l.videoCall : l.audioCall,
+                        style: TextStyle(fontSize: 13, color: subtitleColor),
+                      ),
+                      if (durationStr.isNotEmpty) ...[
+                        Text(' • ', style: TextStyle(color: subtitleColor)),
+                        Text(durationStr, style: TextStyle(fontSize: 13, color: subtitleColor)),
+                      ],
+                    ],
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (timeStr.isNotEmpty)
+                        Text(timeStr, style: TextStyle(fontSize: 12, color: subtitleColor)),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: Icon(
+                          isVideo ? CupertinoIcons.video_camera : CupertinoIcons.phone,
+                          size: 20,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        onPressed: () => context.push(
+                          '/call?calleeId=${call.participant.id}'
+                          '&calleeName=${Uri.encodeComponent(call.participant.name)}'
+                          '&callType=${call.callType}',
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               );
             },
@@ -545,44 +908,64 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObse
   }
 
   Widget _buildTelepathyTab() {
+    final l = AppLocalizations.of(context)!;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           _PulsingIcon(
-            icon: Icons.psychology_outlined,
-            size: 100,
-            color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+            child: TelepathyIcon(
+              size: 100,
+              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.5),
+              filled: false,
+            ),
           ),
           const SizedBox(height: 20),
-          Text('Телепатия', style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+          Text(l.telepathy, style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
         ],
       ),
     );
   }
 
-
   void _openConversation(ConversationModel conv) {
-    context.push(
-      '/conversation/${conv.id}?name=${Uri.encodeComponent(conv.participant.name)}'
-      '&participantId=${conv.participant.id}'
-      '${conv.participant.avatarUrl != null ? '&avatar=${Uri.encodeComponent(conv.participant.avatarUrl!)}' : ''}',
-    );
+    if (conv.isGroup) {
+      final name = conv.groupInfo?.title ?? AppLocalizations.of(context)!.group;
+      final avatar = conv.groupInfo?.avatarUrl;
+      context.push(
+        '/conversation/${conv.id}?name=${Uri.encodeComponent(name)}'
+        '&isGroup=true'
+        '${avatar != null && AppConstants.isValidImageUrl(avatar) ? '&avatar=${Uri.encodeComponent(avatar)}' : ''}',
+      );
+    } else {
+      final p = conv.participant;
+      if (p == null) return;
+      context.push(
+        '/conversation/${conv.id}?name=${Uri.encodeComponent(conv.displayName)}'
+        '&participantId=${p.id}'
+        '${AppConstants.isValidImageUrl(conv.displayAvatar) ? '&avatar=${Uri.encodeComponent(conv.displayAvatar!)}' : ''}',
+      );
+    }
   }
+}
 
-  void _showNewChatSheet(BuildContext ctx) {
-    showModalBottomSheet(
-      context: ctx,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => DraggableScrollableSheet(
-        initialChildSize: 0.6,
-        minChildSize: 0.3,
-        maxChildSize: 0.9,
-        expand: false,
-        builder: (context, controller) => _NewChatSheet(scrollController: controller),
+class _SectionHeader extends StatelessWidget {
+  final String title;
+  final ThemeData theme;
+
+  const _SectionHeader({required this.title, required this.theme});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Text(
+        title,
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: theme.colorScheme.primary,
+          letterSpacing: 0.5,
+        ),
       ),
     );
   }
@@ -594,22 +977,15 @@ class _BrandedD extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ShaderMask(
-      shaderCallback: (bounds) => const SweepGradient(
-        colors: [
-          Color(0xFFFF6B6B),
-          Color(0xFFE4AD3C),
-          Color(0xFF28A745),
-          Color(0xFF3B59FF),
-          Color(0xFFFF6B6B),
-        ],
-        transform: GradientRotation(-math.pi / 2),
+      shaderCallback: (bounds) => const LinearGradient(
+        colors: [Color(0xFF6C63FF), Color(0xFF00C9A7)],
       ).createShader(bounds),
       child: const Text(
         'D',
         style: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w900,
-          fontStyle: FontStyle.italic,
+          fontFamily: 'Magneto',
+          fontSize: 32,
+          fontWeight: FontWeight.bold,
           color: Colors.white,
         ),
       ),
@@ -618,11 +994,9 @@ class _BrandedD extends StatelessWidget {
 }
 
 class _PulsingIcon extends StatefulWidget {
-  final IconData icon;
-  final double size;
-  final Color color;
+  final Widget child;
 
-  const _PulsingIcon({required this.icon, required this.size, required this.color});
+  const _PulsingIcon({required this.child});
 
   @override
   State<_PulsingIcon> createState() => _PulsingIconState();
@@ -654,7 +1028,7 @@ class _PulsingIconState extends State<_PulsingIcon> with SingleTickerProviderSta
           child: child,
         ),
       ),
-      child: Icon(widget.icon, size: widget.size, color: widget.color),
+      child: widget.child,
     );
   }
 }
@@ -674,18 +1048,42 @@ class _ConversationTile extends StatelessWidget {
     required this.onLongPress,
   });
 
-  String _messagePreview(LastMessageInfo? lm) {
-    if (lm == null) return 'Сообщений пока нет';
+  String _messagePreview(LastMessageInfo? lm, AppLocalizations l) {
+    if (lm == null) return l.noMessagesPreview;
+    if (lm.encrypted == true) {
+      if (lm.isVoiceMessage == true) return '\u{1F512} ${l.voiceMessage}';
+      final mime = lm.mimeType?.toLowerCase() ?? '';
+      if (mime.startsWith('image/')) return '\u{1F512} ${l.photo}';
+      if (mime.startsWith('video/')) return '\u{1F512} ${l.video}';
+      if ((lm.fileUrl ?? '').isNotEmpty) return '\u{1F512} ${l.attachment}';
+
+      if (lm.id != null && lm.id!.isNotEmpty) {
+        final cached = LocalStorage.getDecryptedMessage(lm.id!);
+        if (cached != null && cached.isNotEmpty) return cached;
+      }
+      final convPreview = LocalStorage.getConversationPreview(conversation.id);
+      if (convPreview != null && convPreview.isNotEmpty) return convPreview;
+      return '\u{1F512} ${l.encryptedMessage}';
+    }
     final text = lm.text;
-    if (text == null || text.isEmpty) return 'Сообщений пока нет';
-    return text;
+    if (text != null && text.isNotEmpty) return text;
+    if (lm.isVoiceMessage == true) return l.voiceMessage;
+    final mime = lm.mimeType?.toLowerCase() ?? '';
+    if (mime.startsWith('image/')) return l.photo;
+    if (mime.startsWith('video/')) return l.video;
+    if ((lm.fileUrl ?? '').isNotEmpty) return l.attachment;
+    return l.noMessagesPreview;
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final p = conversation.participant;
+    final l = AppLocalizations.of(context)!;
     final lm = conversation.lastMessage;
+    final name = conversation.displayName;
+    final avatar = conversation.displayAvatar;
+    final isGroup = conversation.isGroup;
+    final isOnline = !isGroup && conversation.participant?.isOnline == true;
 
     String timeStr = '';
     if (lm?.createdAt != null) {
@@ -700,26 +1098,44 @@ class _ConversationTile extends StatelessWidget {
       } catch (_) {}
     }
 
+    final isDark = theme.brightness == Brightness.dark;
+    final titleColor = isDark ? Colors.white : Colors.black87;
+    final subtitleColor = isDark ? Colors.grey.shade400 : Colors.grey.shade600;
+    final timeColor = isDark ? Colors.grey.shade500 : Colors.grey.shade600;
+    final cardColor = isDark
+        ? Colors.black.withValues(alpha: 0.35)
+        : Colors.white.withValues(alpha: 0.7);
+
     return Container(
-      color: isSelected ? theme.colorScheme.primary.withValues(alpha: 0.1) : null,
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: isSelected ? theme.colorScheme.primary.withValues(alpha: 0.2) : cardColor,
+        borderRadius: BorderRadius.circular(14),
+      ),
       child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
         leading: Stack(
           children: [
             if (isSelecting)
-              CircleAvatar(
-                radius: 24,
-                backgroundColor: isSelected ? theme.colorScheme.primary : Colors.grey.shade300,
-                child: isSelected
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
-                    : _buildAvatarContent(p),
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: isSelected ? theme.colorScheme.primary : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Center(
+                  child: isSelected
+                      ? const Icon(CupertinoIcons.checkmark_alt, color: Colors.white, size: 20)
+                      : Text(
+                          name.isNotEmpty ? name[0].toUpperCase() : '?',
+                          style: const TextStyle(fontSize: 20),
+                        ),
+                ),
               )
             else ...[
-              CircleAvatar(
-                radius: 24,
-                backgroundImage: p.avatarUrl != null ? NetworkImage(p.avatarUrl!) : null,
-                child: p.avatarUrl == null ? _buildAvatarContent(p) : null,
-              ),
-              if (p.isOnline == true)
+              UserAvatar(avatarUrl: avatar, name: name, radius: 24),
+              if (isOnline)
                 Positioned(
                   right: 0,
                   bottom: 0,
@@ -741,32 +1157,46 @@ class _ConversationTile extends StatelessWidget {
             if (conversation.isPinned)
               Padding(
                 padding: const EdgeInsets.only(right: 4),
-                child: Icon(Icons.push_pin, size: 14, color: theme.colorScheme.primary),
+                child: Icon(CupertinoIcons.pin_fill, size: 14, color: theme.colorScheme.primary),
+              ),
+            if (isGroup)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Icon(CupertinoIcons.person_2_fill, size: 16, color: subtitleColor),
               ),
             Expanded(
               child: Text(
-                p.name,
+                name,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: titleColor,
+                  fontSize: 16,
+                ),
               ),
             ),
             if (conversation.isMuted)
               Padding(
                 padding: const EdgeInsets.only(left: 4),
-                child: Icon(Icons.notifications_off, size: 14, color: Colors.grey.shade500),
+                child: Icon(CupertinoIcons.bell_slash_fill, size: 14, color: subtitleColor),
               ),
             if (timeStr.isNotEmpty)
-              Text(timeStr, style: TextStyle(fontSize: 12, color: Colors.grey.shade500)),
+              Text(timeStr, style: TextStyle(fontSize: 12, color: timeColor)),
           ],
         ),
         subtitle: Row(
           children: [
+            if (isGroup && conversation.groupInfo != null)
+              Text(
+                '${conversation.groupInfo!.memberCount} ${l.members} · ',
+                style: TextStyle(color: subtitleColor, fontSize: 12),
+              ),
             Expanded(
               child: Text(
-                _messagePreview(lm),
+                _messagePreview(lm, l),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: Colors.grey.shade500),
+                style: TextStyle(color: subtitleColor),
               ),
             ),
             if (conversation.unreadCount > 0)
@@ -787,135 +1217,6 @@ class _ConversationTile extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
       ),
-    );
-  }
-
-  Widget _buildAvatarContent(ParticipantInfo p) {
-    return Text(
-      p.name.isNotEmpty ? p.name[0].toUpperCase() : '?',
-      style: const TextStyle(fontSize: 20),
-    );
-  }
-}
-
-class _NewChatSheet extends ConsumerStatefulWidget {
-  final ScrollController scrollController;
-  const _NewChatSheet({required this.scrollController});
-
-  @override
-  ConsumerState<_NewChatSheet> createState() => _NewChatSheetState();
-}
-
-class _NewChatSheetState extends ConsumerState<_NewChatSheet> {
-  final _searchController = TextEditingController();
-  List<Map<String, dynamic>> _results = [];
-  bool _loading = false;
-
-  Future<void> _search(String query) async {
-    if (query.length < 2) {
-      setState(() => _results = []);
-      return;
-    }
-    setState(() => _loading = true);
-    try {
-      final res = await ApiClient().dio.get('/users/search', queryParameters: {'query': query});
-      setState(() {
-        _results = (res.data as List).cast<Map<String, dynamic>>();
-      });
-    } catch (_) {}
-    setState(() => _loading = false);
-  }
-
-  Future<void> _createConversation(String participantId, String name, String? avatar) async {
-    try {
-      final res = await ApiClient().dio.post('/conversations', data: {
-        'participantId': participantId,
-      });
-      final convId = res.data['id'] as String;
-      ref.read(conversationsProvider.notifier).load();
-      if (mounted) {
-        Navigator.pop(context);
-        context.push(
-          '/conversation/$convId?name=${Uri.encodeComponent(name)}'
-          '&participantId=$participantId'
-          '${avatar != null ? '&avatar=${Uri.encodeComponent(avatar)}' : ''}',
-        );
-      }
-    } catch (_) {}
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Column(
-      children: [
-        const SizedBox(height: 8),
-        Container(
-          width: 40,
-          height: 4,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade400,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text('Новый чат', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: TextField(
-            controller: _searchController,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: 'Введите логин пользователя',
-              prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            ),
-            onChanged: _search,
-          ),
-        ),
-        if (_loading) const LinearProgressIndicator(),
-        const SizedBox(height: 8),
-        Expanded(
-          child: ListView.builder(
-            controller: widget.scrollController,
-            itemCount: _results.length,
-            itemBuilder: (context, index) {
-              final user = _results[index];
-              return ListTile(
-                leading: CircleAvatar(
-                  backgroundImage: user['avatarUrl'] != null ? NetworkImage(user['avatarUrl']) : null,
-                  child: user['avatarUrl'] == null
-                      ? Text((user['name'] as String).isNotEmpty ? (user['name'] as String)[0].toUpperCase() : '?')
-                      : null,
-                ),
-                title: Text(user['name'] as String),
-                subtitle: user['username'] != null ? Text('@${user['username']}') : null,
-                trailing: user['isOnline'] == true
-                    ? Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(color: AppColors.onlineGreen, shape: BoxShape.circle),
-                      )
-                    : null,
-                onTap: () => _createConversation(
-                  user['id'] as String,
-                  user['name'] as String,
-                  user['avatarUrl'] as String?,
-                ),
-              );
-            },
-          ),
-        ),
-      ],
     );
   }
 }

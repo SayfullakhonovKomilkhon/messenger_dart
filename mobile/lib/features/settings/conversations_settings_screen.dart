@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/network/api_client.dart';
+import '../../l10n/app_localizations.dart';
 
 class ConversationsSettingsScreen extends ConsumerStatefulWidget {
   const ConversationsSettingsScreen({super.key});
@@ -48,8 +49,9 @@ class _ConversationsSettingsScreenState
       });
     } catch (_) {
       if (mounted) {
+        final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось сохранить настройку')),
+          SnackBar(content: Text(l.settingSaveError)),
         );
       }
     }
@@ -63,70 +65,65 @@ class _ConversationsSettingsScreenState
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(title: const Text('Беседы'), centerTitle: true),
+      appBar: AppBar(title: Text(l.conversations), centerTitle: true),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ListView(
               children: [
                 const SizedBox(height: 8),
 
-                _SectionHeader(title: 'Очистка сообщений'),
+                _SectionHeader(title: l.messageCleanup),
                 Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   child: SwitchListTile(
-                    title: const Text('Очистка сообществ'),
-                    subtitle: const Text(
-                      'Удалять сообщения из сообществ старше 6 месяцев или если их более 2000',
-                    ),
+                    title: Text(l.communityCleanup),
+                    subtitle: Text(l.communityCleanupDescription),
                     value: _getBool('communityCleanup'),
                     onChanged: (v) => _updateSetting('communityCleanup', v),
                   ),
                 ),
 
                 const SizedBox(height: 16),
-                _SectionHeader(title: 'Клавиша Enter'),
+                _SectionHeader(title: l.enterKey),
                 Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   child: SwitchListTile(
-                    title: const Text('Отправка клавишей Enter'),
-                    subtitle: const Text(
-                      'Нажатие клавиши Enter отправит ваше сообщение',
-                    ),
+                    title: Text(l.enterSends),
+                    subtitle: Text(l.enterSendsDescription),
                     value: _getBool('enterSends'),
                     onChanged: (v) => _updateSetting('enterSends', v),
                   ),
                 ),
 
                 const SizedBox(height: 16),
-                _SectionHeader(title: 'Голосовые сообщения'),
+                _SectionHeader(title: l.voiceMessages),
                 Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   child: SwitchListTile(
-                    title: const Text('Автовоспроизведение'),
-                    subtitle: const Text(
-                      'Автоматически воспроизводить сообщения по очереди',
-                    ),
+                    title: Text(l.autoPlay),
+                    subtitle: Text(l.autoPlayDescription),
                     value: _getBool('autoPlayVoice'),
                     onChanged: (v) => _updateSetting('autoPlayVoice', v),
                   ),
                 ),
 
                 const SizedBox(height: 16),
-                _SectionHeader(title: 'Заблокированные контакты'),
+                _SectionHeader(title: l.blockedContacts),
                 Card(
                   margin: const EdgeInsets.symmetric(horizontal: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
                     leading: const Icon(Icons.block),
-                    title: const Text('Заблокированные контакты'),
+                    title: Text(l.blockedContacts),
                     trailing: const Icon(Icons.chevron_right, size: 20),
                     onTap: () => context.push('/settings/blocked'),
                   ),

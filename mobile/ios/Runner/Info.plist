@@ -5,7 +5,11 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Для голосовых звонков и записи голосовых сообщений</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Для видеозвонков</string>
+	<string>Для видеозвонков и фото профиля</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Для выбора фото на аватар и в сообщениях</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Для разблокировки приложения с помощью Face ID</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

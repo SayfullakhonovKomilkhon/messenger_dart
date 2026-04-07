@@ -1,12 +1,32 @@
 import 'dart:io';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:dio/dio.dart';
+import '../../core/constants.dart';
+import '../../core/widgets/user_avatar.dart';
 import '../../core/providers.dart';
 import '../../core/network/api_client.dart';
 import '../../core/models/user_model.dart';
+import '../../l10n/app_localizations.dart';
+
+class _RussianLettersFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final filtered = newValue.text.replaceAll(RegExp(r'[^а-яА-ЯёЁ\s\-]'), '');
+    if (filtered == newValue.text) return newValue;
+    return TextEditingValue(
+      text: filtered,
+      selection: TextSelection.collapsed(offset: filtered.length),
+    );
+  }
+}
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});
@@ -16,8 +36,8 @@ class EditProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
-  late TextEditingController _nameCtrl;
-  late TextEditingController _usernameCtrl;
+  late TextEditingController _nicknameCtrl;
+  late TextEditingController _aiNameCtrl;
   late TextEditingController _bioCtrl;
   String? _avatarUrl;
   File? _newAvatarFile;
@@ -28,16 +48,16 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   void initState() {
     super.initState();
     final user = ref.read(authStateProvider).user;
-    _nameCtrl = TextEditingController(text: user?.name ?? '');
-    _usernameCtrl = TextEditingController(text: user?.username ?? '');
+    _nicknameCtrl = TextEditingController(text: user?.name ?? '');
+    _aiNameCtrl = TextEditingController(text: user?.aiName ?? '');
     _bioCtrl = TextEditingController(text: user?.bio ?? '');
     _avatarUrl = user?.avatarUrl;
   }
 
   @override
   void dispose() {
-    _nameCtrl.dispose();
-    _usernameCtrl.dispose();
+    _nicknameCtrl.dispose();
+    _aiNameCtrl.dispose();
     _bioCtrl.dispose();
     super.dispose();
   }
@@ -57,52 +77,68 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         'file': await MultipartFile.fromFile(picked.path, filename: 'avatar.jpg'),
       });
       final res = await ApiClient().dio.post('/files/upload', data: formData);
-      final url = res.data['url'] as String?;
-      if (url != null && mounted) {
+      var raw = res.data;
+      if (raw is Map && raw.containsKey('data') && raw.length == 1) {
+        raw = raw['data'];
+      }
+      String? url;
+      if (raw is Map) {
+        url = (raw['fileUrl'] ?? raw['url'])?.toString();
+      }
+      if (url != null && url.isNotEmpty && mounted) {
         setState(() => _avatarUrl = url);
+      } else if (mounted) {
+        final l = AppLocalizations.of(context)!;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(l.photoUrlFailed)),
+        );
+        setState(() => _newAvatarFile = null);
       }
     } catch (e) {
       if (mounted) {
+        final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось загрузить фото: $e')),
+          SnackBar(content: Text('${l.photoUploadFailed}: $e')),
         );
         setState(() => _newAvatarFile = null);
       }
     } finally {
-      if (mounted) {
-        setState(() => _uploadingAvatar = false);
-      }
+      if (mounted) setState(() => _uploadingAvatar = false);
     }
   }
 
   void _showAvatarPicker() {
+    final l = AppLocalizations.of(context)!;
     showModalBottomSheet(
       context: context,
-      builder: (ctx) => SafeArea(
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final ic = isDark ? Colors.white70 : const Color(0xFF333333);
+        return SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('Выбрать из галереи'),
+              leading: Icon(CupertinoIcons.photo, color: ic),
+              title: Text(l.pickFromGallery),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickAvatar(ImageSource.gallery);
               },
             ),
             ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('Сделать фото'),
+              leading: Icon(CupertinoIcons.camera, color: ic),
+              title: Text(l.takePhoto),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickAvatar(ImageSource.camera);
               },
             ),
-            if (_avatarUrl != null)
+            if (AppConstants.isValidImageUrl(_avatarUrl))
               ListTile(
-                leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text('Удалить фото',
-                    style: TextStyle(color: Colors.red)),
+                leading: const Icon(CupertinoIcons.trash, color: Colors.red),
+                title: Text(l.deletePhoto,
+                    style: const TextStyle(color: Colors.red)),
                 onTap: () {
                   Navigator.pop(ctx);
                   setState(() {
@@ -113,15 +149,16 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
               ),
           ],
         ),
-      ),
+      );},
     );
   }
 
   Future<void> _save() async {
-    final name = _nameCtrl.text.trim();
-    if (name.isEmpty) {
+    final l = AppLocalizations.of(context)!;
+    final nickname = _nicknameCtrl.text.trim();
+    if (nickname.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Имя не может быть пустым')),
+        SnackBar(content: Text(l.nickCannotBeEmpty)),
       );
       return;
     }
@@ -129,8 +166,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     setState(() => _saving = true);
     try {
       final res = await ApiClient().dio.patch('/users/me', data: {
-        'name': name,
-        'username': _usernameCtrl.text.trim(),
+        'name': nickname,
+        'aiName': _aiNameCtrl.text.trim(),
         'bio': _bioCtrl.text.trim(),
         'avatarUrl': _avatarUrl ?? '',
       });
@@ -138,13 +175,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       ref.read(authStateProvider.notifier).updateUser(updated);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Профиль обновлён')),
+          SnackBar(content: Text(l.profileUpdated)),
         );
         context.pop();
       }
     } catch (e) {
       if (mounted) {
-        String msg = 'Ошибка при сохранении';
+        String msg = l.errorSaving;
         if (e is DioException && e.response?.data is Map) {
           msg = (e.response!.data as Map)['message']?.toString() ?? msg;
         }
@@ -153,31 +190,31 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
+      if (mounted) setState(() => _saving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
+    final user = ref.watch(authStateProvider).user;
+    final publicId = user?.publicId ?? '—';
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Редактировать профиль'),
+        title: Text(l.editProfileTitle),
         centerTitle: true,
         actions: [
           TextButton(
             onPressed: _saving ? null : _save,
             child: _saving
                 ? const SizedBox(
-                    width: 20,
-                    height: 20,
+                    width: 20, height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : Text(
-                    'Сохранить',
+                    l.save,
                     style: TextStyle(
                       color: theme.colorScheme.primary,
                       fontWeight: FontWeight.w600,
@@ -196,54 +233,47 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                 onTap: _uploadingAvatar ? null : _showAvatarPicker,
                 child: Stack(
                   children: [
-                    CircleAvatar(
-                      radius: 54,
-                      backgroundImage: _newAvatarFile != null
-                          ? FileImage(_newAvatarFile!)
-                          : (_avatarUrl != null
-                              ? NetworkImage(_avatarUrl!)
-                              : null) as ImageProvider?,
-                      child: (_newAvatarFile == null && _avatarUrl == null)
-                          ? Text(
-                              _nameCtrl.text.isNotEmpty
-                                  ? _nameCtrl.text[0].toUpperCase()
-                                  : '?',
-                              style: const TextStyle(fontSize: 44),
-                            )
-                          : null,
-                    ),
+                    if (_newAvatarFile != null)
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(22),
+                        child: Image.file(
+                          _newAvatarFile!,
+                          width: 108, height: 108, fit: BoxFit.cover,
+                        ),
+                      )
+                    else
+                      UserAvatar(
+                        avatarUrl: _avatarUrl,
+                        name: _nicknameCtrl.text,
+                        radius: 54,
+                      ),
                     if (_uploadingAvatar)
                       Positioned.fill(
                         child: Container(
                           decoration: BoxDecoration(
                             color: Colors.black38,
-                            shape: BoxShape.circle,
+                            borderRadius: BorderRadius.circular(22),
                           ),
                           child: const Center(
                             child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
+                              color: Colors.white, strokeWidth: 2,
                             ),
                           ),
                         ),
                       ),
                     Positioned(
-                      bottom: 0,
-                      right: 0,
+                      bottom: 0, right: 0,
                       child: Container(
                         padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
                           color: theme.colorScheme.primary,
                           shape: BoxShape.circle,
                           border: Border.all(
-                            color: theme.scaffoldBackgroundColor,
-                            width: 2,
+                            color: theme.scaffoldBackgroundColor, width: 2,
                           ),
                         ),
                         child: const Icon(
-                          Icons.camera_alt,
-                          size: 18,
-                          color: Colors.white,
+                          CupertinoIcons.camera, size: 18, color: Colors.white,
                         ),
                       ),
                     ),
@@ -251,61 +281,182 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
 
             Text(
-              'Основная информация',
+              l.yourId,
               style: TextStyle(
                 color: theme.colorScheme.primary,
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(CupertinoIcons.number, size: 18,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.5)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      publicId,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: publicId));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(l.idCopied)),
+                      );
+                    },
+                    child: Icon(CupertinoIcons.doc_on_doc, size: 18,
+                        color: theme.colorScheme.primary),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 6, left: 4),
+              child: Text(
+                l.idDescription,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+            ),
+            const SizedBox(height: 24),
 
+            Text(
+              l.nickname,
+              style: TextStyle(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 8),
             TextField(
-              controller: _nameCtrl,
+              controller: _nicknameCtrl,
               decoration: InputDecoration(
-                labelText: 'Имя',
+                hintText: l.nicknameHint,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                prefixIcon: const Icon(Icons.person_outline),
+                prefixIcon: const Icon(CupertinoIcons.person),
               ),
+              inputFormatters: [
+                _RussianLettersFormatter(),
+                LengthLimitingTextInputFormatter(30),
+              ],
               textInputAction: TextInputAction.next,
+              buildCounter: (context, {required currentLength, required isFocused, maxLength}) {
+                return Text(
+                  '$currentLength / 30',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: currentLength >= 30 ? Colors.red : Colors.grey.shade500,
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 4),
+              child: Text(
+                l.nicknameDescription,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+            ),
+            const SizedBox(height: 20),
 
+            Text(
+              l.aiAgentName,
+              style: TextStyle(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 8),
             TextField(
-              controller: _usernameCtrl,
+              controller: _aiNameCtrl,
               decoration: InputDecoration(
-                labelText: 'Имя пользователя',
-                hintText: 'Латиницей, без пробелов',
+                hintText: l.aiNameHint,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                prefixIcon: const Icon(Icons.alternate_email),
+                prefixIcon: const Icon(CupertinoIcons.sparkles),
               ),
+              inputFormatters: [
+                _RussianLettersFormatter(),
+                LengthLimitingTextInputFormatter(40),
+              ],
               textInputAction: TextInputAction.next,
+              buildCounter: (context, {required currentLength, required isFocused, maxLength}) {
+                return Text(
+                  '$currentLength / 40',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: currentLength >= 40 ? Colors.red : Colors.grey.shade500,
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.only(top: 4, left: 4),
+              child: Text(
+                l.aiNameDescription,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+              ),
+            ),
+            const SizedBox(height: 20),
 
+            Text(
+              l.aboutYou,
+              style: TextStyle(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _bioCtrl,
               decoration: InputDecoration(
-                labelText: 'О себе',
-                hintText: 'Расскажите немного о себе',
+                hintText: l.aboutHint,
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
-                prefixIcon: const Icon(Icons.info_outline),
+                prefixIcon: const Icon(CupertinoIcons.info),
+                counterText: '',
               ),
               maxLines: 3,
-              maxLength: 200,
+              inputFormatters: [
+                LengthLimitingTextInputFormatter(70),
+              ],
               textInputAction: TextInputAction.done,
+              buildCounter: (context, {required currentLength, required isFocused, maxLength}) {
+                return Text(
+                  '$currentLength / 70',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: currentLength >= 70 ? Colors.red : Colors.grey.shade500,
+                  ),
+                );
+              },
             ),
 
-            const SizedBox(height: 24),
+            const SizedBox(height: 32),
             SizedBox(
               width: double.infinity,
               height: 48,
@@ -313,16 +464,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                 onPressed: _saving ? null : _save,
                 child: _saving
                     ? const SizedBox(
-                        width: 20,
-                        height: 20,
+                        width: 20, height: 20,
                         child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+                          strokeWidth: 2, color: Colors.white,
                         ),
                       )
-                    : const Text(
-                        'Сохранить изменения',
-                        style: TextStyle(fontSize: 16),
+                    : Text(
+                        l.saveChanges,
+                        style: const TextStyle(fontSize: 16),
                       ),
               ),
             ),

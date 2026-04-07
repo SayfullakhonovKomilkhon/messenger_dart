@@ -1,8 +1,11 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/providers.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/telegram_pattern_background.dart';
+import '../../l10n/app_localizations.dart';
 
 class AppearanceSettingsScreen extends ConsumerStatefulWidget {
   const AppearanceSettingsScreen({super.key});
@@ -16,17 +19,17 @@ class _AppearanceSettingsScreenState
     extends ConsumerState<AppearanceSettingsScreen> {
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final themeState = ref.watch(themeProvider);
     final themeNotifier = ref.read(themeProvider.notifier);
     final theme = Theme.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Внешний вид')),
+      appBar: AppBar(title: Text(l.appearance)),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Theme Section (2x2 grid)
-          Text('Тема', style: theme.textTheme.titleMedium),
+          Text(l.theme, style: theme.textTheme.titleMedium),
           const SizedBox(height: 12),
           GridView.count(
             shrinkWrap: true,
@@ -39,7 +42,7 @@ class _AppearanceSettingsScreenState
               final isSelected = themeState.type == type;
               return _ThemePreviewCard(
                 themeType: type,
-                label: _themeName(type),
+                label: type == AppThemeType.light ? l.themeLight : l.themeDark,
                 isSelected: isSelected,
                 onTap: () => themeNotifier.setTheme(type),
               );
@@ -47,8 +50,7 @@ class _AppearanceSettingsScreenState
           ),
           const SizedBox(height: 24),
 
-          // Accent Color Section (7 circles in a row)
-          Text('Акцентный цвет', style: theme.textTheme.titleMedium),
+          Text(l.accentColor, style: theme.textTheme.titleMedium),
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -75,12 +77,16 @@ class _AppearanceSettingsScreenState
           ),
           const SizedBox(height: 24),
 
-          // System Theme Toggle
-          Text('Системная тема', style: theme.textTheme.titleMedium),
+          Text(l.chatWallpaper, style: theme.textTheme.titleMedium),
+          const SizedBox(height: 12),
+          _WallpaperGrid(),
+          const SizedBox(height: 24),
+
+          Text(l.systemTheme, style: theme.textTheme.titleMedium),
           const SizedBox(height: 12),
           ListTile(
-            leading: const Icon(Icons.light_mode),
-            title: const Text('Как в системе'),
+            leading: const Icon(CupertinoIcons.device_phone_portrait),
+            title: Text(l.followSystem),
             trailing: Switch(
               value: themeState.followSystemTheme,
               onChanged: (v) => themeNotifier.setFollowSystemTheme(v),
@@ -89,19 +95,6 @@ class _AppearanceSettingsScreenState
         ],
       ),
     );
-  }
-
-  String _themeName(AppThemeType type) {
-    switch (type) {
-      case AppThemeType.light:
-        return 'Классическая светлая';
-      case AppThemeType.dark:
-        return 'Классическая тёмная';
-      case AppThemeType.midnight:
-        return 'Океанская тёмная';
-      case AppThemeType.amoled:
-        return 'Океанская светлая';
-    }
   }
 }
 
@@ -149,20 +142,6 @@ class _ThemePreviewCard extends StatelessWidget {
       receivedBubble: Color(0xFF2E3142),
       receivedText: Colors.white,
     ),
-    AppThemeType.midnight: _ThemePreviewData(
-      bg: Color(0xFF252735),
-      sentBubble: Color(0xFF57C9FA),
-      sentText: Colors.black,
-      receivedBubble: Color(0xFF3D4A5D),
-      receivedText: Colors.white,
-    ),
-    AppThemeType.amoled: _ThemePreviewData(
-      bg: Color(0xFFFCFFFF),
-      sentBubble: Color(0xFF57C9FA),
-      sentText: Color(0xFF19345D),
-      receivedBubble: Color(0xFFB3EDF2),
-      receivedText: Color(0xFF19345D),
-    ),
   };
 
   @override
@@ -189,7 +168,6 @@ class _ThemePreviewCard extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.end,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // Received: "Привет!"
                     Align(
                       alignment: Alignment.centerLeft,
                       child: _MessageBubble(
@@ -199,7 +177,6 @@ class _ThemePreviewCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    // Received: "Как дела?"
                     Align(
                       alignment: Alignment.centerLeft,
                       child: _MessageBubble(
@@ -209,7 +186,6 @@ class _ThemePreviewCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    // Sent: "Все отлично!"
                     Align(
                       alignment: Alignment.centerRight,
                       child: _MessageBubble(
@@ -272,6 +248,112 @@ class _MessageBubble extends StatelessWidget {
         text,
         style: TextStyle(fontSize: 11, color: textColor),
       ),
+    );
+  }
+}
+
+class _WallpaperGrid extends ConsumerWidget {
+  static String _wallpaperName(String key, AppLocalizations l) {
+    switch (key) {
+      case 'love': return l.wallpaperLove;
+      case 'starwars': return l.wallpaperStarwars;
+      case 'doodles': return l.wallpaperDoodles;
+      case 'math': return l.wallpaperMath;
+      case 'none': return l.wallpaperNone;
+      default: return key;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final l = AppLocalizations.of(context)!;
+    final current = ref.watch(wallpaperProvider);
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final accent = theme.colorScheme.primary;
+
+    return GridView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3,
+        mainAxisSpacing: 10,
+        crossAxisSpacing: 10,
+        childAspectRatio: 0.75,
+      ),
+      itemCount: ChatWallpaperInfo.all.length,
+      itemBuilder: (context, index) {
+        final wp = ChatWallpaperInfo.all[index];
+        final isSelected = current == wp.id;
+
+        return GestureDetector(
+          onTap: () => ref.read(wallpaperProvider.notifier).set(wp.id),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: _WallpaperPreviewTile(wallpaperId: wp.id),
+                ),
+                Positioned(
+                  bottom: 0, left: 0, right: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.black.withValues(alpha: 0.55)],
+                      ),
+                    ),
+                    child: Text(
+                      _wallpaperName(wp.nameKey, l),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                if (isSelected)
+                  Positioned(
+                    top: 6, right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        color: accent,
+                        shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4)],
+                      ),
+                      child: const Icon(Icons.check, color: Colors.white, size: 12),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _WallpaperPreviewTile extends StatelessWidget {
+  final String wallpaperId;
+  const _WallpaperPreviewTile({required this.wallpaperId});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF1A1A2E) : const Color(0xFFF0F0F0);
+
+    if (wallpaperId == 'none') {
+      return Container(color: bgColor);
+    }
+
+    return Container(
+      color: bgColor,
+      child: TelegramPatternBackground.buildPattern(wallpaperId, isDark),
     );
   }
 }

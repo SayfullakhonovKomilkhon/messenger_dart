@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../core/widgets/telepathy_icon.dart';
 
 class TelepathyScreen extends StatefulWidget {
   const TelepathyScreen({super.key});
@@ -52,10 +53,12 @@ class _TelepathyScreenState extends State<TelepathyScreen>
                   shape: BoxShape.circle,
                   color: theme.colorScheme.primary.withValues(alpha: 0.1),
                 ),
-                child: Icon(
-                  Icons.psychology,
-                  size: 60,
-                  color: theme.colorScheme.primary.withValues(alpha: 0.6),
+                child: Center(
+                  child: TelepathyIcon(
+                    size: 60,
+                    color: theme.colorScheme.primary.withValues(alpha: 0.6),
+                    filled: true,
+                  ),
                 ),
               ),
             ),

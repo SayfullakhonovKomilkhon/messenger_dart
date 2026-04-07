@@ -17,6 +17,11 @@ class WsClient {
   Completer<void>? _connectCompleter;
   int _subIdCounter = 0;
 
+  final ValueNotifier<bool> connectionNotifier = ValueNotifier<bool>(false);
+
+  /// Вызываются при успешном подключении — для повторной отправки отложенных сообщений.
+  static final List<VoidCallback> onConnectCallbacks = [];
+
   WsClient._internal();
 
   Future<void> connect() async {
@@ -63,6 +68,14 @@ class WsClient {
   void _onConnect(StompFrame frame) {
     debugPrint('[WS] Connected');
     _connected = true;
+    connectionNotifier.value = true;
+    for (final cb in onConnectCallbacks) {
+      try {
+        cb();
+      } catch (e) {
+        debugPrint('[WS] onConnect callback error: $e');
+      }
+    }
     // Перерегистрируем все существующие подписки после реконнекта
     for (final entry in _subscriptions.entries) {
       for (final sub in entry.value) {
@@ -78,6 +91,7 @@ class WsClient {
   void _onDisconnect(StompFrame frame) {
     debugPrint('[WS] Disconnected');
     _connected = false;
+    connectionNotifier.value = false;
   }
 
   /// Подписывается на destination и возвращает id подписки.
@@ -156,6 +170,7 @@ class WsClient {
   void disconnect() {
     _client?.deactivate();
     _connected = false;
+    connectionNotifier.value = false;
     _subscriptions.clear();
     _connectCompleter = null;
   }
@@ -168,5 +183,5 @@ class _SubEntry {
   final StompCallback callback;
   Function({Map<String, String>? unsubscribeHeaders})? unsubscribeFn;
 
-  _SubEntry({required this.id, required this.callback, this.unsubscribeFn});
+  _SubEntry({required this.id, required this.callback});
 }

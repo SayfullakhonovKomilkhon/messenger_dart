@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/widgets/user_avatar.dart';
 import '../../core/network/api_client.dart';
+import '../../l10n/app_localizations.dart';
 
 class BlockedContactsScreen extends ConsumerStatefulWidget {
   const BlockedContactsScreen({super.key});
@@ -33,16 +35,17 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
   }
 
   Future<void> _unblock(String userId, String name) async {
+    final l = AppLocalizations.of(context)!;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Разблокировать'),
-        content: Text('Разблокировать $name?'),
+        title: Text(l.unblockUser),
+        content: Text(l.unblockConfirm(name)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(l.cancel)),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Разблокировать'),
+            child: Text(l.unblockUser),
           ),
         ],
       ),
@@ -57,7 +60,7 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Контакт разблокирован')),
+          SnackBar(content: Text(l.contactUnblocked)),
         );
       }
     } catch (_) {}
@@ -65,8 +68,9 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(title: const Text('Заблокированные контакты'), centerTitle: true),
+      appBar: AppBar(title: Text(l.blockedContacts), centerTitle: true),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _blocked.isEmpty
@@ -76,10 +80,10 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
                     children: [
                       Icon(Icons.block, size: 64, color: Colors.grey.shade400),
                       const SizedBox(height: 16),
-                      Text('Нет заблокированных контактов',
+                      Text(l.noBlockedContacts,
                           style: TextStyle(color: Colors.grey.shade600, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 4),
-                      Text('Заблокированные вами контакты\nпоявятся здесь',
+                      Text(l.blockedContactsHint,
                           style: TextStyle(color: Colors.grey.shade500, fontSize: 13),
                           textAlign: TextAlign.center),
                     ],
@@ -89,20 +93,15 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
                   itemCount: _blocked.length,
                   itemBuilder: (context, index) {
                     final user = _blocked[index];
-                    final name = user['name'] as String? ?? 'Неизвестный';
+                    final name = user['name'] as String? ?? l.unknown;
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.red.shade100,
-                          backgroundImage: user['avatarUrl'] != null
-                              ? NetworkImage(user['avatarUrl'])
-                              : null,
-                          child: user['avatarUrl'] == null
-                              ? Text(name[0].toUpperCase(),
-                                  style: TextStyle(color: Colors.red.shade700))
-                              : null,
+                        leading: UserAvatar(
+                          avatarUrl: user['avatarUrl'] as String?,
+                          name: name,
+                          radius: 24,
                         ),
                         title: Text(name),
                         subtitle: user['id'] != null
@@ -119,7 +118,7 @@ class _BlockedContactsScreenState extends ConsumerState<BlockedContactsScreen> {
                             : null,
                         trailing: OutlinedButton(
                           onPressed: () => _unblock(user['id'] as String, name),
-                          child: const Text('Разблокировать'),
+                          child: Text(l.unblockUser),
                         ),
                       ),
                     );

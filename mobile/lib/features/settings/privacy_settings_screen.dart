@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/network/api_client.dart';
+import '../../core/providers.dart';
+import '../../core/storage/local_storage.dart';
+import '../../l10n/app_localizations.dart';
 
 class PrivacySettingsScreen extends ConsumerStatefulWidget {
   const PrivacySettingsScreen({super.key});
@@ -24,13 +27,20 @@ class _PrivacySettingsScreenState extends ConsumerState<PrivacySettingsScreen> {
   Future<void> _loadSettings() async {
     try {
       final res = await ApiClient().dio.get('/users/me/settings');
-      setState(() {
-        _settings = res.data is Map<String, dynamic>
-            ? Map<String, dynamic>.from(res.data)
-            : {};
-        _loading = false;
-      });
+      final raw = res.data;
+      final data = raw is Map
+          ? Map<String, dynamic>.from(raw.map((k, v) => MapEntry(k.toString(), v)))
+          : <String, dynamic>{};
+      _settings = data;
+      final privacy = data['privacy'];
+      if (privacy is Map && privacy.containsKey('blockApp')) {
+        await LocalStorage.setBlockApp(privacy['blockApp'] == true);
+      }
+      if (mounted) setState(() => _loading = false);
     } catch (_) {
+      if (_settings['privacy'] == null) {
+        _settings['privacy'] = <String, dynamic>{'blockApp': LocalStorage.getBlockApp()};
+      }
       if (mounted) setState(() => _loading = false);
     }
   }
@@ -41,14 +51,19 @@ class _PrivacySettingsScreenState extends ConsumerState<PrivacySettingsScreen> {
           Map<String, dynamic>.from(_settings['privacy'] ?? {});
       (_settings['privacy'] as Map<String, dynamic>)[key] = value;
     });
+    if (key == 'blockApp') {
+      await LocalStorage.setBlockApp(value == true);
+    }
     try {
       await ApiClient().dio.patch('/users/me/settings', data: {
         'privacy': {key: value},
       });
+      ref.invalidate(userSettingsProvider);
     } catch (_) {
       if (mounted) {
+        final l = AppLocalizations.of(context)!;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Не удалось сохранить настройку')),
+          SnackBar(content: Text(l.settingSaveError)),
         );
       }
     }
@@ -59,14 +74,16 @@ class _PrivacySettingsScreenState extends ConsumerState<PrivacySettingsScreen> {
     if (privacy is Map && privacy.containsKey(key)) {
       return privacy[key] == true;
     }
+    if (key == 'blockApp') return LocalStorage.getBlockApp();
     return defaultValue;
   }
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Конфиденциальность'),
+        title: Text(l.privacy),
         centerTitle: true,
       ),
       body: _loading
@@ -75,101 +92,72 @@ class _PrivacySettingsScreenState extends ConsumerState<PrivacySettingsScreen> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               children: [
                 _PrivacySection(
-                  header: 'Голос и видео (Бета)',
+                  header: l.voiceVideoBeta,
                   children: [
                     SwitchListTile(
-                      title: const Text('Голосовые и видеозвонки'),
-                      subtitle: const Text(
-                        'Разрешить входящие и исходящие звонки',
-                      ),
+                      title: Text(l.voiceVideoCalls),
+                      subtitle: Text(l.allowCalls),
                       value: _getBool('voiceVideoCalls', defaultValue: true),
                       onChanged: (v) => _updateSetting('voiceVideoCalls', v),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
                 _PrivacySection(
-                  header: 'Безопасность экрана',
+                  header: l.screenSecurity,
                   children: [
                     SwitchListTile(
-                      title: const Text('Заблокировать приложение'),
-                      subtitle: const Text(
-                        'Использовать Touch ID, Face ID или пароль устройства для входа в Demos',
-                      ),
+                      title: Text(l.lockApp),
+                      subtitle: Text(l.lockAppDescription),
                       value: _getBool('blockApp'),
                       onChanged: (v) => _updateSetting('blockApp', v),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
                 _PrivacySection(
                   children: [
                     ListTile(
-                      title: const Text('Запросы сообщений'),
+                      title: Text(l.messageRequests),
                       trailing: const Icon(Icons.chevron_right, size: 20),
                       onTap: () => context.push('/settings/message-requests'),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
                 _PrivacySection(
                   children: [
                     SwitchListTile(
-                      title: const Text('Отчеты о прочтении'),
-                      subtitle: const Text(
-                        'Отправлять отчеты о прочтении в личных чатах',
-                      ),
+                      title: Text(l.readReceipts),
+                      subtitle: Text(l.readReceiptsDescription),
                       value: _getBool('readReceipts', defaultValue: true),
                       onChanged: (v) => _updateSetting('readReceipts', v),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
                 _PrivacySection(
                   children: [
                     SwitchListTile(
-                      title: const Text('Индикаторы набора текста'),
-                      subtitle: const Text(
-                        'Видеть и показывать, когда кто-то печатает',
-                      ),
+                      title: Text(l.typingIndicators),
+                      subtitle: Text(l.typingIndicatorsDescription),
                       value: _getBool('typingIndicators', defaultValue: true),
                       onChanged: (v) => _updateSetting('typingIndicators', v),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
                 _PrivacySection(
                   children: [
                     SwitchListTile(
-                      title: const Text('Предпросмотр ссылок'),
-                      subtitle: const Text(
-                        'Создавать превью для поддерживаемых ссылок',
-                      ),
+                      title: Text(l.linkPreviews),
+                      subtitle: Text(l.linkPreviewsDescription),
                       value: _getBool('linkPreview', defaultValue: true),
                       onChanged: (v) => _updateSetting('linkPreview', v),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-
-                _PrivacySection(
-                  children: [
-                    SwitchListTile(
-                      title: const Text('Инкогнито-клавиатура'),
-                      subtitle: const Text(
-                        'Запретить клавиатуре запоминать вводимые слова',
-                      ),
-                      value: _getBool('incognitoKeyboard', defaultValue: true),
-                      onChanged: (v) =>
-                          _updateSetting('incognitoKeyboard', v),
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 24),
               ],
             ),

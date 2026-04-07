@@ -1,6 +1,8 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:messenger/core/services/firebase_service.dart';
+import 'e2ee/key_manager.dart';
 import 'models/user_model.dart';
 import 'models/conversation_model.dart';
 import 'models/message_model.dart';
@@ -52,9 +54,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
       return;
     }
     try {
-      final res = await _api.get('/users/me');
+      final res = await _api.get('/users/me').timeout(const Duration(seconds: 5));
       final user = UserModel.fromJson(res.data);
       state = state.copyWith(isAuthenticated: true, isLoading: false, user: user);
+      FirebaseService().registerToken();
+      E2eeKeyManager().initialize();
     } catch (_) {
       await SecureStorage.clearTokens();
       state = state.copyWith(isAuthenticated: false, isLoading: false);
@@ -77,31 +81,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
       final user = UserModel.fromJson(body['user']);
       state = state.copyWith(isAuthenticated: true, isLoading: false, user: user);
+      FirebaseService().registerToken();
+      E2eeKeyManager().initialize();
     } catch (e) {
       debugPrint('[AUTH] login error: $e');
-      state = state.copyWith(
-        isLoading: false,
-        error: _extractError(e),
-      );
-    }
-  }
-
-  Future<void> register(String phone, String password, String name) async {
-    state = state.copyWith(isLoading: true, error: null);
-    try {
-      final res = await _api.post('/auth/register', data: {
-        'phone': phone,
-        'password': password,
-        'name': name,
-      });
-      final body = res.data;
-      await SecureStorage.saveTokens(
-        body['accessToken'],
-        body['refreshToken'],
-      );
-      final user = UserModel.fromJson(body['user']);
-      state = state.copyWith(isAuthenticated: true, isLoading: false, user: user);
-    } catch (e) {
       state = state.copyWith(
         isLoading: false,
         error: _extractError(e),
@@ -117,6 +100,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
     } catch (_) {}
     await SecureStorage.clearTokens();
+    await E2eeKeyManager().reset();
     state = const AuthState(isAuthenticated: false, isLoading: false);
   }
 
@@ -151,7 +135,7 @@ class ThemeState {
   final bool followSystemTheme;
 
   const ThemeState({
-    this.type = AppThemeType.dark,
+    this.type = AppThemeType.light,
     this.accentIndex = 0,
     this.followSystemTheme = false,
   });
@@ -171,13 +155,20 @@ class ThemeNotifier extends StateNotifier<ThemeState> {
     final followSystem = LocalStorage.getFollowSystemTheme();
     final type = AppThemeType.values.firstWhere(
       (t) => t.name == themeName,
-      orElse: () => AppThemeType.dark,
+      orElse: () => AppThemeType.light,
     );
     state = ThemeState(
       type: type,
       accentIndex: accentIdx,
       followSystemTheme: followSystem,
     );
+  }
+
+  void toggle() {
+    final next = state.type == AppThemeType.dark
+        ? AppThemeType.light
+        : AppThemeType.dark;
+    setTheme(next);
   }
 
   void setTheme(AppThemeType type) {
@@ -208,6 +199,48 @@ class ThemeNotifier extends StateNotifier<ThemeState> {
   }
 }
 
+// Locale
+final localeProvider = StateNotifierProvider<LocaleNotifier, Locale>((ref) {
+  return LocaleNotifier();
+});
+
+class LocaleNotifier extends StateNotifier<Locale> {
+  LocaleNotifier() : super(Locale(LocalStorage.getLocale())) ;
+
+  void setLocale(String langCode) {
+    LocalStorage.setLocale(langCode);
+    state = Locale(langCode);
+  }
+}
+
+// User settings (privacy, etc.)
+final userSettingsProvider =
+    FutureProvider<Map<String, dynamic>>((ref) async {
+  try {
+    final res = await ApiClient().dio.get('/users/me/settings');
+    final raw = res.data;
+    return raw is Map
+        ? Map<String, dynamic>.from(raw.map((k, v) => MapEntry(k.toString(), v)))
+        : <String, dynamic>{};
+  } catch (_) {
+    return <String, dynamic>{};
+  }
+});
+
+// Wallpaper
+final wallpaperProvider = StateNotifierProvider<WallpaperNotifier, String>((ref) {
+  return WallpaperNotifier();
+});
+
+class WallpaperNotifier extends StateNotifier<String> {
+  WallpaperNotifier() : super(LocalStorage.getChatWallpaper());
+
+  void set(String id) {
+    LocalStorage.setChatWallpaper(id);
+    state = id;
+  }
+}
+
 // Conversations
 final conversationsProvider =
     StateNotifierProvider<ConversationsNotifier, AsyncValue<List<ConversationModel>>>((ref) {
@@ -219,17 +252,131 @@ class ConversationsNotifier extends StateNotifier<AsyncValue<List<ConversationMo
 
   final _api = ApiClient().dio;
 
+  Set<String> _blockedIds = {};
+
+  Future<Set<String>> _loadBlockedIds() async {
+    try {
+      final res = await _api.get('/users/me/blocked');
+      return (res.data as List)
+          .cast<Map<String, dynamic>>()
+          .map((b) => b['id'] as String)
+          .toSet();
+    } catch (_) {
+      return _blockedIds;
+    }
+  }
+
+  List<ConversationModel> _filterBlocked(List<ConversationModel> list) {
+    if (_blockedIds.isEmpty) return list;
+    return list.where((c) {
+      if (c.type == 'GROUP') return true;
+      final pid = c.participant?.id;
+      return pid == null || !_blockedIds.contains(pid);
+    }).toList();
+  }
+
+  static DateTime? _parseTime(String? s) {
+    if (s == null) return null;
+    return DateTime.tryParse(s);
+  }
+
+  List<ConversationModel> _sorted(List<ConversationModel> list) {
+    list.sort((a, b) {
+      if (a.isPinned != b.isPinned) return a.isPinned ? -1 : 1;
+      final ta = _parseTime(a.lastMessage?.createdAt) ??
+          _parseTime(a.updatedAt) ??
+          DateTime(2000);
+      final tb = _parseTime(b.lastMessage?.createdAt) ??
+          _parseTime(b.updatedAt) ??
+          DateTime(2000);
+      return tb.compareTo(ta);
+    });
+    return list;
+  }
+
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final res = await _api.get('/conversations');
-      final list = (res.data as List)
+      final results = await Future.wait([
+        _api.get('/conversations'),
+        _loadBlockedIds(),
+      ]);
+      _blockedIds = results[1] as Set<String>;
+      final list = ((results[0] as dynamic).data as List)
           .map((e) => ConversationModel.fromJson(e))
           .toList();
-      state = AsyncValue.data(list);
+      state = AsyncValue.data(_sorted(_filterBlocked(list)));
     } catch (e, st) {
       state = AsyncValue.error(e, st);
     }
+  }
+
+  Future<void> loadSilently() async {
+    try {
+      final results = await Future.wait([
+        _api.get('/conversations'),
+        _loadBlockedIds(),
+      ]);
+      _blockedIds = results[1] as Set<String>;
+      final serverList = ((results[0] as dynamic).data as List)
+          .map((e) => ConversationModel.fromJson(e))
+          .toList();
+
+      final localList = state.valueOrNull ?? [];
+      final merged = _mergeWithLocal(serverList, localList);
+      state = AsyncValue.data(_sorted(_filterBlocked(merged)));
+    } catch (_) {}
+  }
+
+  /// Merge server data with local, keeping whichever lastMessage is newer.
+  List<ConversationModel> _mergeWithLocal(
+      List<ConversationModel> server, List<ConversationModel> local) {
+    final localMap = {for (final c in local) c.id: c};
+    final result = <ConversationModel>[];
+    final seenIds = <String>{};
+    for (final sc in server) {
+      seenIds.add(sc.id);
+      final lc = localMap[sc.id];
+      if (lc != null) {
+        final serverTime = _parseTime(sc.lastMessage?.createdAt);
+        final localTime = _parseTime(lc.lastMessage?.createdAt);
+        if (localTime != null &&
+            serverTime != null &&
+            localTime.isAfter(serverTime)) {
+          result.add(lc.copyWith(
+            unreadCount: sc.unreadCount,
+            isPinned: sc.isPinned,
+            isMuted: sc.isMuted,
+          ));
+        } else {
+          result.add(sc);
+        }
+      } else {
+        result.add(sc);
+      }
+    }
+    for (final lc in local) {
+      if (!seenIds.contains(lc.id)) {
+        result.add(lc);
+      }
+    }
+    return result;
+  }
+
+  void removeByParticipantId(String participantId) {
+    _blockedIds.add(participantId);
+    state.whenData((list) {
+      final filtered = list.where((c) {
+        if (c.type == 'GROUP') return true;
+        return c.participant?.id != participantId;
+      }).toList();
+      state = AsyncValue.data(filtered);
+    });
+  }
+
+  void unblockParticipant(String participantId) {
+    _blockedIds.remove(participantId);
+    loadSilently();
   }
 
   void updateConversation(ConversationModel updated) {
@@ -249,22 +396,98 @@ class ConversationsNotifier extends StateNotifier<AsyncValue<List<ConversationMo
     });
   }
 
-  void addOrUpdateFromMessage(MessageModel msg) {
+  /// [incrementUnread] — true, если сообщение от другого пользователя (мы получатель)
+  void addOrUpdateFromMessage(MessageModel msg, {bool incrementUnread = false}) {
     state.whenData((list) {
       final idx = list.indexWhere((c) => c.id == msg.conversationId);
       if (idx >= 0) {
         final conv = list[idx];
+        final currentTime = _parseTime(conv.lastMessage?.createdAt);
+        final newTime = _parseTime(msg.createdAt);
+        final currentId = conv.lastMessage?.id ?? '';
+        final newId = msg.id;
+        if (currentId.isNotEmpty &&
+            newId.isNotEmpty &&
+            currentTime != null &&
+            newTime != null &&
+            newTime.isBefore(currentTime)) {
+          return;
+        }
+        final newUnread = incrementUnread ? conv.unreadCount + 1 : conv.unreadCount;
         final updated = conv.copyWith(
           lastMessage: LastMessageInfo(
+            id: msg.id,
             text: msg.text,
             createdAt: msg.createdAt,
             status: msg.status,
+            fileUrl: msg.fileUrl,
+            mimeType: msg.mimeType,
+            isVoiceMessage: msg.isVoiceMessage,
+            encrypted: msg.encrypted,
           ),
+          unreadCount: newUnread,
         );
         final newList = [...list];
-        newList[idx] = updated;
+        newList.removeAt(idx);
+
+        int insertAt = 0;
+        for (int i = 0; i < newList.length; i++) {
+          if (newList[i].isPinned && !updated.isPinned) continue;
+          if (!newList[i].isPinned && updated.isPinned) {
+            insertAt = i;
+            break;
+          }
+          final t = _parseTime(newList[i].lastMessage?.createdAt);
+          if (newTime != null && t != null && newTime.isAfter(t)) {
+            insertAt = i;
+            break;
+          }
+          insertAt = i + 1;
+        }
+        newList.insert(insertAt, updated);
         state = AsyncValue.data(newList);
       }
+    });
+  }
+
+  void updateLastMessageStatus(String conversationId, String status) {
+    state.whenData((list) {
+      final idx = list.indexWhere((c) => c.id == conversationId);
+      if (idx >= 0) {
+        final conv = list[idx];
+        final lm = conv.lastMessage;
+        if (lm != null) {
+          final updated = conv.copyWith(
+            lastMessage: LastMessageInfo(
+              id: lm.id,
+              text: lm.text,
+              createdAt: lm.createdAt,
+              status: status,
+              fileUrl: lm.fileUrl,
+              mimeType: lm.mimeType,
+              isVoiceMessage: lm.isVoiceMessage,
+              encrypted: lm.encrypted,
+            ),
+          );
+          final newList = [...list];
+          newList[idx] = updated;
+          state = AsyncValue.data(newList);
+        }
+      }
+    });
+  }
+
+  void updateParticipantOnline(String participantId, bool isOnline) {
+    state.whenData((list) {
+      final newList = list.map((c) {
+        if (c.participant != null && c.participant!.id == participantId) {
+          return c.copyWith(
+            participant: c.participant!.copyWith(isOnline: isOnline),
+          );
+        }
+        return c;
+      }).toList();
+      state = AsyncValue.data(newList);
     });
   }
 }
@@ -329,7 +552,14 @@ class MessagesNotifier extends StateNotifier<AsyncValue<List<MessageModel>>> {
 
   void addMessage(MessageModel msg) {
     final current = state.valueOrNull ?? [];
-    if (current.any((m) => m.clientMessageId == msg.clientMessageId)) return;
+    final idx = current.indexWhere((m) => m.clientMessageId == msg.clientMessageId);
+    if (idx >= 0) {
+      // Обновляем оптимистичное сообщение реальными данными с сервера
+      final newList = [...current];
+      newList[idx] = msg;
+      state = AsyncValue.data(newList);
+      return;
+    }
     state = AsyncValue.data([msg, ...current]);
   }
 
@@ -340,9 +570,23 @@ class MessagesNotifier extends StateNotifier<AsyncValue<List<MessageModel>>> {
     );
   }
 
+  void updateMessageByClientId(String clientMessageId, MessageModel updated) {
+    final current = state.valueOrNull ?? [];
+    state = AsyncValue.data(
+      current.map((m) => m.clientMessageId == clientMessageId ? updated : m).toList(),
+    );
+  }
+
   void removeMessage(String messageId) {
     final current = state.valueOrNull ?? [];
     state = AsyncValue.data(current.where((m) => m.id != messageId).toList());
+  }
+
+  void removeByClientId(String clientMessageId) {
+    final current = state.valueOrNull ?? [];
+    state = AsyncValue.data(
+      current.where((m) => m.clientMessageId != clientMessageId).toList(),
+    );
   }
 }
 

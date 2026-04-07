@@ -17,6 +17,8 @@ mobile/ios/Pods/
 mobile/ios/.symlinks/
 mobile/google-services.json
 mobile/GoogleService-Info.plist
+mobile/android/app/google-services.json
+mobile/ios/Runner/GoogleService-Info.plist
 
 # IDE
 .idea/

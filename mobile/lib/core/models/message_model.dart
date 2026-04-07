@@ -2,6 +2,8 @@ class MessageModel {
   final String id;
   final String conversationId;
   final String senderId;
+  final String? senderName;
+  final String? senderAvatar;
   final String? text;
   final String? fileUrl;
   final String? mimeType;
@@ -13,15 +15,21 @@ class MessageModel {
   final String? voiceWaveform;
   final String? replyToId;
   final String? forwardedFromId;
+  final String? forwardedFromName;
   final bool isPinned;
   final bool isEdited;
   final bool isDeleted;
   final String? editedAt;
+  final bool encrypted;
+  final String? encryptedFileKey;
+  final String? fileIv;
 
   const MessageModel({
     required this.id,
     required this.conversationId,
     required this.senderId,
+    this.senderName,
+    this.senderAvatar,
     this.text,
     this.fileUrl,
     this.mimeType,
@@ -33,10 +41,14 @@ class MessageModel {
     this.voiceWaveform,
     this.replyToId,
     this.forwardedFromId,
+    this.forwardedFromName,
     this.isPinned = false,
     this.isEdited = false,
     this.isDeleted = false,
     this.editedAt,
+    this.encrypted = false,
+    this.encryptedFileKey,
+    this.fileIv,
   });
 
   factory MessageModel.fromJson(Map<String, dynamic> json) {
@@ -44,6 +56,8 @@ class MessageModel {
       id: json['id'] as String,
       conversationId: json['conversationId'] as String,
       senderId: json['senderId'] as String,
+      senderName: json['senderName'] as String?,
+      senderAvatar: json['senderAvatar'] as String?,
       text: json['text'] as String?,
       fileUrl: json['fileUrl'] as String?,
       mimeType: json['mimeType'] as String?,
@@ -55,10 +69,14 @@ class MessageModel {
       voiceWaveform: json['voiceWaveform'] as String?,
       replyToId: json['replyToId'] as String?,
       forwardedFromId: json['forwardedFromId'] as String?,
+      forwardedFromName: json['forwardedFromName'] as String?,
       isPinned: json['isPinned'] as bool? ?? false,
       isEdited: json['isEdited'] as bool? ?? false,
       isDeleted: json['isDeleted'] as bool? ?? false,
       editedAt: json['editedAt'] as String?,
+      encrypted: json['encrypted'] as bool? ?? false,
+      encryptedFileKey: json['encryptedFileKey'] as String?,
+      fileIv: json['fileIv'] as String?,
     );
   }
 
@@ -66,6 +84,8 @@ class MessageModel {
     'id': id,
     'conversationId': conversationId,
     'senderId': senderId,
+    'senderName': senderName,
+    'senderAvatar': senderAvatar,
     'text': text,
     'fileUrl': fileUrl,
     'mimeType': mimeType,
@@ -77,10 +97,14 @@ class MessageModel {
     'voiceWaveform': voiceWaveform,
     'replyToId': replyToId,
     'forwardedFromId': forwardedFromId,
+    'forwardedFromName': forwardedFromName,
     'isPinned': isPinned,
     'isEdited': isEdited,
     'isDeleted': isDeleted,
     'editedAt': editedAt,
+    'encrypted': encrypted,
+    'encryptedFileKey': encryptedFileKey,
+    'fileIv': fileIv,
   };
 
   bool get isImage =>

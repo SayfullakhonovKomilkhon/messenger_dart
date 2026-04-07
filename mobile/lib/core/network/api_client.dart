@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../constants.dart';
+import '../storage/local_storage.dart';
 import '../storage/secure_storage.dart';
 
 class ApiClient {
@@ -22,6 +23,11 @@ class ApiClient {
         final token = await SecureStorage.getAccessToken();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
+        }
+        options.headers['Accept-Language'] = LocalStorage.getLocale();
+        // Для FormData Dio сам устанавливает Content-Type с boundary
+        if (options.data is FormData) {
+          options.headers.remove('Content-Type');
         }
         handler.next(options);
       },
