@@ -1,40 +1,17 @@
-# Messenger
+# messenger
 
-Монорепозиторий мессенджера.
+A new Flutter project.
 
-## Структура
-- `backend/` — Java 17 + Spring Boot 3 (API сервер)
-- `mobile/`  — Flutter (мобильное приложение, реализуется отдельно)
+## Getting Started
 
-## Быстрый старт (локальная разработка)
+This project is a starting point for a Flutter application.
 
-1. Скопировать конфиг:
-   ```bash
-   cp .env.example .env
-   ```
-   Заполнить все значения в `.env`
+A few resources to get you started if this is your first Flutter project:
 
-2. Запустить все сервисы:
-   ```bash
-   docker-compose up --build
-   ```
+- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
+- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
+- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
 
-3. Сервер доступен:
-   - HTTP API:  http://localhost:3000/api/v1
-   - WebSocket: ws://localhost:3000/ws
-
-4. Flutter подключается (Android эмулятор):
-   ```
-   http://10.0.2.2:3000/api/v1
-   ```
-
-## Сервисы в Docker
-
-| Сервис   | Порт | Описание             |
-|----------|------|----------------------|
-| backend  | 3000 | Spring Boot API      |
-| postgres | 5432 | База данных          |
-| redis    | 6379 | Кеш и сессии         |
-| coturn   | 3478 | TURN сервер (WebRTC) |
-# messenger_beckend
-# messenger_flutter
+For help getting started with Flutter development, view the
+[online documentation](https://docs.flutter.dev/), which offers tutorials,
+samples, guidance on mobile development, and a full API reference.

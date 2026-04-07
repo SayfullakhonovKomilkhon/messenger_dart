@@ -1,27 +1,27 @@
-# Секреты — никогда не коммитить
-.env
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+.metadata
 
-# Backend — Java/Gradle
-backend/.gradle/
-backend/build/
-backend/out/
+# Android
+android/.gradle/
+android/local.properties
+android/app/google-services.json
 
-# Mobile — Flutter
-mobile/.dart_tool/
-mobile/.flutter-plugins
-mobile/.flutter-plugins-dependencies
-mobile/build/
-mobile/android/.gradle/
-mobile/android/local.properties
-mobile/ios/Pods/
-mobile/ios/.symlinks/
-mobile/google-services.json
-mobile/GoogleService-Info.plist
-mobile/android/app/google-services.json
-mobile/ios/Runner/GoogleService-Info.plist
+# iOS
+ios/Pods/
+ios/.symlinks/
+ios/Runner/GoogleService-Info.plist
 
 # IDE
 .idea/
 *.iml
 .vscode/
 *.DS_Store
+
+# Secrets
+.env
+google-services.json
+GoogleService-Info.plist
