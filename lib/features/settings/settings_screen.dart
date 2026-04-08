@@ -193,6 +193,11 @@ class SettingsBody extends ConsumerWidget {
             title: l.messageRequests,
             onTap: () => context.push('/settings/message-requests'),
           ),
+          SettingsTile(
+            icon: CupertinoIcons.bolt,
+            title: l.myBots,
+            onTap: () => context.push('/settings/bots'),
+          ),
         ]),
 
         const SizedBox(height: 8),

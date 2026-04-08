@@ -358,6 +358,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                           avatarUrl: displayAvatar,
                           name: displayName,
                           radius: 56,
+                          isBot: _user?.isBot == true,
                         )
                       : CircleAvatar(
                           radius: 56,

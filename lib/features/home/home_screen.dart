@@ -1134,7 +1134,12 @@ class _ConversationTile extends StatelessWidget {
                 ),
               )
             else ...[
-              UserAvatar(avatarUrl: avatar, name: name, radius: 24),
+              UserAvatar(
+                avatarUrl: avatar,
+                name: name,
+                radius: 24,
+                isBot: conversation.participant?.isBot == true,
+              ),
               if (isOnline)
                 Positioned(
                   right: 0,

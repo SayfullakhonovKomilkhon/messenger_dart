@@ -873,4 +873,99 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get wallpaperNone => 'No Background';
+
+  @override
+  String get myBots => 'My Bots';
+
+  @override
+  String get createBot => 'Create Bot';
+
+  @override
+  String get botName => 'Bot Name';
+
+  @override
+  String get botUsername => 'Bot Username';
+
+  @override
+  String get botDescription => 'Description';
+
+  @override
+  String get botDescriptionHint => 'What does this bot do?';
+
+  @override
+  String get botAvatar => 'Avatar URL';
+
+  @override
+  String get botWebhookUrl => 'Webhook URL';
+
+  @override
+  String get botWebhookHint => 'https://example.com/webhook';
+
+  @override
+  String get botToken => 'Bot Token';
+
+  @override
+  String get botTokenCopied => 'Token copied to clipboard';
+
+  @override
+  String get botRegenerateToken => 'Regenerate Token';
+
+  @override
+  String get botRegenerateTokenConfirm =>
+      'Generate a new token? The old one will stop working.';
+
+  @override
+  String get botSetWebhook => 'Set Webhook';
+
+  @override
+  String get botDeleteWebhook => 'Delete Webhook';
+
+  @override
+  String get botDelete => 'Delete Bot';
+
+  @override
+  String get botDeleteConfirm =>
+      'Are you sure you want to delete this bot? This action cannot be undone.';
+
+  @override
+  String get botCreated => 'Bot created';
+
+  @override
+  String get botUpdated => 'Bot updated';
+
+  @override
+  String get botDeleted => 'Bot deleted';
+
+  @override
+  String get botActive => 'Active';
+
+  @override
+  String get botInactive => 'Inactive';
+
+  @override
+  String get botToggleActive => 'Toggle Active';
+
+  @override
+  String get noBots => 'No bots yet';
+
+  @override
+  String get noBotsHint => 'Create your first bot to get started';
+
+  @override
+  String get botNameRequired => 'Bot name is required';
+
+  @override
+  String get botUsernameRequired => 'Bot username is required';
+
+  @override
+  String get botBadge => 'BOT';
+
+  @override
+  String get botEditTitle => 'Edit Bot';
+
+  @override
+  String get botWebhookUpdated => 'Webhook updated';
+
+  @override
+  String get botWebhookDeleted => 'Webhook removed';
 }

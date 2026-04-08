@@ -23,6 +23,9 @@ import 'features/settings/edit_profile_screen.dart';
 import 'features/profile/user_profile_screen.dart';
 import 'features/group/create_group_screen.dart';
 import 'features/group/group_info_screen.dart';
+import 'features/bots/bots_list_screen.dart';
+import 'features/bots/create_bot_screen.dart';
+import 'features/bots/bot_detail_screen.dart';
 
 class MessengerApp extends ConsumerWidget {
   const MessengerApp({super.key});
@@ -138,6 +141,20 @@ class MessengerApp extends ConsumerWidget {
           path: '/groups/:id/info',
           builder: (_, state) => GroupInfoScreen(
             groupId: state.pathParameters['id']!,
+          ),
+        ),
+        GoRoute(
+          path: '/settings/bots',
+          builder: (_, _) => const BotsListScreen(),
+        ),
+        GoRoute(
+          path: '/settings/bots/create',
+          builder: (_, _) => const CreateBotScreen(),
+        ),
+        GoRoute(
+          path: '/settings/bots/:id',
+          builder: (_, state) => BotDetailScreen(
+            botId: state.pathParameters['id']!,
           ),
         ),
           ],

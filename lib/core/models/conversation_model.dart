@@ -105,6 +105,7 @@ class ParticipantInfo {
   final String? aiName;
   final String? avatarUrl;
   final bool? isOnline;
+  final bool? isBot;
 
   const ParticipantInfo({
     required this.id,
@@ -113,6 +114,7 @@ class ParticipantInfo {
     this.aiName,
     this.avatarUrl,
     this.isOnline,
+    this.isBot,
   });
 
   factory ParticipantInfo.fromJson(Map<String, dynamic> json) {
@@ -123,6 +125,7 @@ class ParticipantInfo {
       aiName: json['aiName'] as String?,
       avatarUrl: json['avatarUrl'] as String?,
       isOnline: json['isOnline'] as bool?,
+      isBot: json['isBot'] as bool?,
     );
   }
 
@@ -134,6 +137,7 @@ class ParticipantInfo {
       aiName: aiName,
       avatarUrl: avatarUrl,
       isOnline: isOnline ?? this.isOnline,
+      isBot: isBot,
     );
   }
 }

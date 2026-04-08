@@ -883,4 +883,99 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get wallpaperNone => 'Без фона';
+
+  @override
+  String get myBots => 'Мои боты';
+
+  @override
+  String get createBot => 'Создать бота';
+
+  @override
+  String get botName => 'Имя бота';
+
+  @override
+  String get botUsername => 'Имя пользователя бота';
+
+  @override
+  String get botDescription => 'Описание';
+
+  @override
+  String get botDescriptionHint => 'Что делает этот бот?';
+
+  @override
+  String get botAvatar => 'URL аватара';
+
+  @override
+  String get botWebhookUrl => 'URL вебхука';
+
+  @override
+  String get botWebhookHint => 'https://example.com/webhook';
+
+  @override
+  String get botToken => 'Токен бота';
+
+  @override
+  String get botTokenCopied => 'Токен скопирован';
+
+  @override
+  String get botRegenerateToken => 'Пересоздать токен';
+
+  @override
+  String get botRegenerateTokenConfirm =>
+      'Сгенерировать новый токен? Старый перестанет работать.';
+
+  @override
+  String get botSetWebhook => 'Установить вебхук';
+
+  @override
+  String get botDeleteWebhook => 'Удалить вебхук';
+
+  @override
+  String get botDelete => 'Удалить бота';
+
+  @override
+  String get botDeleteConfirm =>
+      'Вы уверены, что хотите удалить бота? Это действие необратимо.';
+
+  @override
+  String get botCreated => 'Бот создан';
+
+  @override
+  String get botUpdated => 'Бот обновлён';
+
+  @override
+  String get botDeleted => 'Бот удалён';
+
+  @override
+  String get botActive => 'Активен';
+
+  @override
+  String get botInactive => 'Неактивен';
+
+  @override
+  String get botToggleActive => 'Вкл/Выкл бота';
+
+  @override
+  String get noBots => 'Ботов пока нет';
+
+  @override
+  String get noBotsHint => 'Создайте своего первого бота';
+
+  @override
+  String get botNameRequired => 'Имя бота обязательно';
+
+  @override
+  String get botUsernameRequired => 'Имя пользователя бота обязательно';
+
+  @override
+  String get botBadge => 'БОТ';
+
+  @override
+  String get botEditTitle => 'Редактировать бота';
+
+  @override
+  String get botWebhookUpdated => 'Вебхук обновлён';
+
+  @override
+  String get botWebhookDeleted => 'Вебхук удалён';
 }

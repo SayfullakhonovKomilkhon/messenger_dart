@@ -1753,6 +1753,192 @@ abstract class AppLocalizations {
   /// In ru, this message translates to:
   /// **'Без фона'**
   String get wallpaperNone;
+
+  /// No description provided for @myBots.
+  ///
+  /// In ru, this message translates to:
+  /// **'Мои боты'**
+  String get myBots;
+
+  /// No description provided for @createBot.
+  ///
+  /// In ru, this message translates to:
+  /// **'Создать бота'**
+  String get createBot;
+
+  /// No description provided for @botName.
+  ///
+  /// In ru, this message translates to:
+  /// **'Имя бота'**
+  String get botName;
+
+  /// No description provided for @botUsername.
+  ///
+  /// In ru, this message translates to:
+  /// **'Имя пользователя бота'**
+  String get botUsername;
+
+  /// No description provided for @botDescription.
+  ///
+  /// In ru, this message translates to:
+  /// **'Описание'**
+  String get botDescription;
+
+  /// No description provided for @botDescriptionHint.
+  ///
+  /// In ru, this message translates to:
+  /// **'Что делает этот бот?'**
+  String get botDescriptionHint;
+
+  /// No description provided for @botAvatar.
+  ///
+  /// In ru, this message translates to:
+  /// **'URL аватара'**
+  String get botAvatar;
+
+  /// No description provided for @botWebhookUrl.
+  ///
+  /// In ru, this message translates to:
+  /// **'URL вебхука'**
+  String get botWebhookUrl;
+
+  /// No description provided for @botWebhookHint.
+  ///
+  /// In ru, this message translates to:
+  /// **'https://example.com/webhook'**
+  String get botWebhookHint;
+
+  /// No description provided for @botToken.
+  ///
+  /// In ru, this message translates to:
+  /// **'Токен бота'**
+  String get botToken;
+
+  /// No description provided for @botTokenCopied.
+  ///
+  /// In ru, this message translates to:
+  /// **'Токен скопирован'**
+  String get botTokenCopied;
+
+  /// No description provided for @botRegenerateToken.
+  ///
+  /// In ru, this message translates to:
+  /// **'Пересоздать токен'**
+  String get botRegenerateToken;
+
+  /// No description provided for @botRegenerateTokenConfirm.
+  ///
+  /// In ru, this message translates to:
+  /// **'Сгенерировать новый токен? Старый перестанет работать.'**
+  String get botRegenerateTokenConfirm;
+
+  /// No description provided for @botSetWebhook.
+  ///
+  /// In ru, this message translates to:
+  /// **'Установить вебхук'**
+  String get botSetWebhook;
+
+  /// No description provided for @botDeleteWebhook.
+  ///
+  /// In ru, this message translates to:
+  /// **'Удалить вебхук'**
+  String get botDeleteWebhook;
+
+  /// No description provided for @botDelete.
+  ///
+  /// In ru, this message translates to:
+  /// **'Удалить бота'**
+  String get botDelete;
+
+  /// No description provided for @botDeleteConfirm.
+  ///
+  /// In ru, this message translates to:
+  /// **'Вы уверены, что хотите удалить бота? Это действие необратимо.'**
+  String get botDeleteConfirm;
+
+  /// No description provided for @botCreated.
+  ///
+  /// In ru, this message translates to:
+  /// **'Бот создан'**
+  String get botCreated;
+
+  /// No description provided for @botUpdated.
+  ///
+  /// In ru, this message translates to:
+  /// **'Бот обновлён'**
+  String get botUpdated;
+
+  /// No description provided for @botDeleted.
+  ///
+  /// In ru, this message translates to:
+  /// **'Бот удалён'**
+  String get botDeleted;
+
+  /// No description provided for @botActive.
+  ///
+  /// In ru, this message translates to:
+  /// **'Активен'**
+  String get botActive;
+
+  /// No description provided for @botInactive.
+  ///
+  /// In ru, this message translates to:
+  /// **'Неактивен'**
+  String get botInactive;
+
+  /// No description provided for @botToggleActive.
+  ///
+  /// In ru, this message translates to:
+  /// **'Вкл/Выкл бота'**
+  String get botToggleActive;
+
+  /// No description provided for @noBots.
+  ///
+  /// In ru, this message translates to:
+  /// **'Ботов пока нет'**
+  String get noBots;
+
+  /// No description provided for @noBotsHint.
+  ///
+  /// In ru, this message translates to:
+  /// **'Создайте своего первого бота'**
+  String get noBotsHint;
+
+  /// No description provided for @botNameRequired.
+  ///
+  /// In ru, this message translates to:
+  /// **'Имя бота обязательно'**
+  String get botNameRequired;
+
+  /// No description provided for @botUsernameRequired.
+  ///
+  /// In ru, this message translates to:
+  /// **'Имя пользователя бота обязательно'**
+  String get botUsernameRequired;
+
+  /// No description provided for @botBadge.
+  ///
+  /// In ru, this message translates to:
+  /// **'БОТ'**
+  String get botBadge;
+
+  /// No description provided for @botEditTitle.
+  ///
+  /// In ru, this message translates to:
+  /// **'Редактировать бота'**
+  String get botEditTitle;
+
+  /// No description provided for @botWebhookUpdated.
+  ///
+  /// In ru, this message translates to:
+  /// **'Вебхук обновлён'**
+  String get botWebhookUpdated;
+
+  /// No description provided for @botWebhookDeleted.
+  ///
+  /// In ru, this message translates to:
+  /// **'Вебхук удалён'**
+  String get botWebhookDeleted;
 }
 
 class _AppLocalizationsDelegate
